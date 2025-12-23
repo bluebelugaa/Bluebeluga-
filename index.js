@@ -1,6 +1,6 @@
-// index.js - Chronos V9 (Portable & Draggable) 🟣🌪️
+// index.js - Chronos V10 (Perfect Drag & Click) 🟣✨
 
-const extensionName = "Chronos_V9_Draggable";
+const extensionName = "Chronos_V10_Perfect";
 
 let stats = {
     enabled: true,
@@ -15,7 +15,7 @@ const stripHtmlToText = (html) => {
                    .replace(/<\/p>/gi, '\n\n')
                    .replace(/<\/div>/gi, '\n')
                    .replace(/<\/h[1-6]>/gi, '\n');
-    text = text.replace(/<[^>]+>/g, ''); // ลบ HTML Tags ทั้งหมด
+    text = text.replace(/<[^>]+>/g, ''); 
     text = text.replace(/\n\s*\n/g, '\n\n').trim();
     return text;
 };
@@ -23,49 +23,53 @@ const stripHtmlToText = (html) => {
 const estimateTokens = (chars) => Math.round(chars / 3.5);
 
 // =================================================================
-// 2. UI: ลูกแก้วสีม่วง (เล็กลง + ลากได้)
+// 2. UI: ลูกแก้ว V10 (แก้ระบบสัมผัส)
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
     style.innerHTML = `
         #chronos-orb {
             position: fixed; 
-            top: 100px; right: 20px; /* ตำแหน่งเริ่มต้น */
-            width: 45px; height: 45px; /* เล็กลง */
-            background: rgba(0, 0, 0, 0.8);
+            top: 150px; right: 20px; /* ตำแหน่งเริ่ม */
+            width: 45px; height: 45px;
+            background: rgba(10, 10, 10, 0.9);
             border: 2px solid #D500F9;
             border-radius: 50%;
             z-index: 999999; 
             display: flex; align-items: center; justify-content: center;
-            font-size: 20px; color: #E040FB;
+            font-size: 22px; color: #E040FB;
             box-shadow: 0 0 10px rgba(213, 0, 249, 0.5);
-            backdrop-filter: blur(4px);
-            touch-action: none; /* ห้ามเลื่อนหน้าจอตอนลากปุ่ม */
+            backdrop-filter: blur(5px);
             user-select: none;
-            cursor: grab;
+            cursor: pointer;
+            touch-action: none; /* สำคัญ! ป้องกันหน้าจอเลื่อนตาม */
+            transition: transform 0.1s;
         }
-        #chronos-orb:active { cursor: grabbing; border-color: #fff; }
+        #chronos-orb:active { transform: scale(0.95); border-color: #fff; }
         
         /* Effect ตัวเลขเด้ง */
         .token-popup {
             position: fixed;
-            color: #00E676; font-weight: bold; font-size: 14px;
+            color: #00E676; font-weight: bold; font-size: 16px;
             pointer-events: none; z-index: 1000000;
-            text-shadow: 0 1px 2px black;
-            animation: floatUp 1.5s ease-out forwards;
+            text-shadow: 0 2px 4px black;
+            font-family: sans-serif;
+            animation: floatUp 2s ease-out forwards;
         }
         @keyframes floatUp {
-            0% { transform: translateY(0); opacity: 1; }
-            100% { transform: translateY(-50px); opacity: 0; }
+            0% { transform: translateY(0) scale(1); opacity: 1; }
+            100% { transform: translateY(-60px) scale(1.2); opacity: 0; }
         }
 
         #chronos-panel {
-            position: fixed; top: 150px; right: 80px;
-            width: 250px; padding: 10px;
-            background: #121212; border: 1px solid #D500F9;
-            color: #eee; font-family: monospace; font-size: 10px;
+            position: fixed;
+            width: 200px; padding: 10px;
+            background: #1a1a1a; border: 1px solid #D500F9;
+            color: #eee; font-family: monospace; font-size: 11px;
             display: none; z-index: 999998;
             box-shadow: 0 5px 20px #000;
+            border-radius: 8px;
+            pointer-events: none; /* กันกดโดน */
         }
     `;
     document.head.appendChild(style);
@@ -85,100 +89,110 @@ const createUI = () => {
     document.body.appendChild(orb);
     document.body.appendChild(panel);
 
-    // ทำให้ลากได้
-    makeDraggable(orb);
-
-    // คลิกเพื่อเปิดเมนู (ต้องเช็คว่าไม่ได้ลากอยู่)
-    orb.onclick = (e) => {
-        if (orb.getAttribute('data-dragging') === 'true') return;
-        panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
-        renderPanel(panel);
-    };
-};
-
-const makeDraggable = (elm) => {
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-    let isDragging = false;
-
-    const dragMouseDown = (e) => {
-        e.preventDefault();
-        // รองรับทั้งเมาส์และนิ้วสัมผัส
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-
-        pos3 = clientX;
-        pos4 = clientY;
-        isDragging = false;
-        elm.setAttribute('data-dragging', 'false');
-
-        document.onmouseup = closeDragElement;
-        document.onmousemove = elementDrag;
-        document.ontouchend = closeDragElement;
-        document.ontouchmove = elementDrag;
-    };
-
-    const elementDrag = (e) => {
-        isDragging = true;
-        elm.setAttribute('data-dragging', 'true');
-        
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-
-        pos1 = pos3 - clientX;
-        pos2 = pos4 - clientY;
-        pos3 = clientX;
-        pos4 = clientY;
-
-        elm.style.top = (elm.offsetTop - pos2) + "px";
-        elm.style.left = (elm.offsetLeft - pos1) + "px";
-        
-        // ย้าย panel ตามไปด้วย (ให้อยู่ใกล้ๆ กัน)
-        const panel = document.getElementById('chronos-panel');
-        if (panel) {
-            panel.style.top = (elm.offsetTop + 50) + "px";
-            panel.style.left = (elm.offsetLeft - 200) + "px"; // ให้เมนูออกทางซ้าย
-        }
-    };
-
-    const closeDragElement = () => {
-        document.onmouseup = null;
-        document.onmousemove = null;
-        document.ontouchend = null;
-        document.ontouchmove = null;
-        
-        // หน่วงเวลาเล็กน้อยเพื่อให้ onclick รู้ว่าพึ่งจบการลาก
-        setTimeout(() => {
-            elm.setAttribute('data-dragging', 'false');
-        }, 100);
-    };
-
-    elm.onmousedown = dragMouseDown;
-    elm.ontouchstart = dragMouseDown;
-};
-
-const renderPanel = (panel) => {
-    panel.innerHTML = `
-        <strong style="color:#D500F9;">CHRONOS V9</strong><br>
-        Saved Tokens: <b style="color:#00E676;">${stats.totalSaved}</b><br>
-        <div style="font-size:9px; color:#777; margin-top:5px;">
-            (ลากลูกแก้วเพื่อย้ายตำแหน่ง)
-        </div>
-    `;
-};
-
-// ฟังก์ชันแสดงตัวเลขเด้ง (Visual Feedback)
-const showFloatingNumber = (amount, x, y) => {
-    const el = document.createElement('div');
-    el.className = 'token-popup';
-    el.innerHTML = `+${amount} Tok`;
-    el.style.left = x + 'px';
-    el.style.top = y + 'px';
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 1500); // ลบทิ้งเมื่ออนิเมชั่นจบ
+    // เรียกใช้ฟังก์ชันลากเวอร์ชั่นอัปเกรด
+    setupSmartDrag(orb, panel);
 };
 
 // =================================================================
-// 3. Logic: ตัดจริง (Execution)
+// 3. Logic: Smart Drag (แยกแยะการจิ้ม vs การลาก)
+// =================================================================
+const setupSmartDrag = (elm, panel) => {
+    let isDragging = false;
+    let startX, startY;
+    let initialLeft, initialTop;
+
+    const onStart = (e) => {
+        // e.preventDefault(); // อย่าใส่บรรทัดนี้ ไม่งั้นจะกดคลิกไม่ได้ในบาง Browser
+        const touch = e.type === 'touchstart' ? e.touches[0] : e;
+        startX = touch.clientX;
+        startY = touch.clientY;
+        initialLeft = elm.offsetLeft;
+        initialTop = elm.offsetTop;
+        isDragging = false; // รีเซ็ตสถานะ
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onEnd);
+        document.addEventListener('touchmove', onMove, { passive: false });
+        document.addEventListener('touchend', onEnd);
+    };
+
+    const onMove = (e) => {
+        const touch = e.type === 'touchmove' ? e.touches[0] : e;
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+
+        // ถ้าขยับเกิน 5 pixels ถือว่า "กำลังลาก"
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+            isDragging = true;
+            if(e.cancelable) e.preventDefault(); // กันหน้าจอเลื่อน
+            
+            elm.style.left = `${initialLeft + dx}px`;
+            elm.style.top = `${initialTop + dy}px`;
+            
+            // ซ่อน panel ตอนลากจะได้ไม่เกะกะ
+            panel.style.display = 'none';
+        }
+    };
+
+    const onEnd = (e) => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onEnd);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onEnd);
+
+        if (!isDragging) {
+            // *** ถ้าไม่ได้ลาก แปลว่า "จิ้ม" (Click) ***
+            togglePanel(elm, panel);
+        }
+    };
+
+    elm.addEventListener('mousedown', onStart);
+    elm.addEventListener('touchstart', onStart, { passive: false });
+};
+
+const togglePanel = (orb, panel) => {
+    if (panel.style.display === 'block') {
+        panel.style.display = 'none';
+    } else {
+        // อัปเดตข้อความ
+        panel.innerHTML = `
+            <strong style="color:#D500F9;">CHRONOS V10</strong><br>
+            Saved: <b style="color:#00E676;">${stats.totalSaved}</b> Tok<br>
+            <div style="color:#aaa; margin-top:5px; font-size:9px;">
+                (Status: Running)
+            </div>
+        `;
+        
+        // คำนวณตำแหน่งให้ Panel อยู่ข้างๆ ลูกแก้วเสมอ
+        const rect = orb.getBoundingClientRect();
+        // ให้เด้งไปทางซ้ายของลูกแก้ว
+        panel.style.left = (rect.left - 210) + 'px'; 
+        panel.style.top = rect.top + 'px';
+        
+        // ถ้าชิดขอบซ้ายเกินไป ให้เด้งไปทางขวาแทน
+        if (parseInt(panel.style.left) < 0) {
+            panel.style.left = (rect.right + 10) + 'px';
+        }
+
+        panel.style.display = 'block';
+        
+        // Auto hide after 3 seconds
+        setTimeout(() => panel.style.display = 'none', 3000);
+    }
+};
+
+const showFloatingNumber = (amount, x, y) => {
+    const el = document.createElement('div');
+    el.className = 'token-popup';
+    el.innerHTML = `+${amount}`;
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2000);
+};
+
+// =================================================================
+// 4. Execution Logic
 // =================================================================
 const optimizePayload = (data) => {
     if (!stats.enabled) return data;
@@ -187,12 +201,12 @@ const optimizePayload = (data) => {
 
     if (data.body && data.body.messages) {
         data.body.messages.forEach(msg => {
+            // เช็คว่ามี HTML Tag
             if (msg.content && /<[^>]+>/.test(msg.content)) {
                 const oldLen = msg.content.length;
                 
-                // ล้างบาง HTML
                 const cleanText = stripHtmlToText(msg.content);
-                msg.content = `[System Content: ${cleanText.substring(0, 20)}...]` + cleanText; // เก็บ text ไว้
+                msg.content = `[System Content: ${cleanText.substring(0, 15)}...]` + cleanText;
 
                 const newLen = msg.content.length;
                 charsSaved += (oldLen - newLen);
@@ -204,20 +218,29 @@ const optimizePayload = (data) => {
         const tokens = estimateTokens(charsSaved);
         stats.totalSaved += tokens;
         
-        // แสดงตัวเลขเด้งที่ลูกแก้ว
+        // Effect เด้งเลข
         const orb = document.getElementById('chronos-orb');
         if (orb) {
             const rect = orb.getBoundingClientRect();
-            showFloatingNumber(tokens, rect.left, rect.top - 20);
+            // ให้เลขเด้งออกจากกลางลูกแก้ว
+            showFloatingNumber(tokens, rect.left + 10, rect.top - 20);
+            
+            // Effect กระตุกนิดนึงให้รู้ว่าทำงาน
+            orb.style.transform = "scale(1.2)";
+            orb.style.borderColor = "#00E676";
+            setTimeout(() => {
+                orb.style.transform = "scale(1)";
+                orb.style.borderColor = "#D500F9";
+            }, 200);
         }
-        console.log(`[Chronos V9] Saved ~${tokens} tokens.`);
+        console.log(`[Chronos] Saved ~${tokens} tokens.`);
     }
 
     return data;
 };
 
 // =================================================================
-// 4. Start
+// 5. Start
 // =================================================================
 injectStyles();
 setTimeout(createUI, 1000);
@@ -225,6 +248,6 @@ setTimeout(createUI, 1000);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-    console.log('[Chronos V9] Draggable Loaded.');
+    console.log('[Chronos V10] Touch System Loaded.');
 }
 
