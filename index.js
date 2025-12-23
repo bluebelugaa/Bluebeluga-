@@ -1,59 +1,68 @@
-// index.js - Chronos Ghost Protocol (Visual: HTML / Send: Text) 👻
+// index.js - Chronos V4 (Universal Fix & Debugger) 🛠️
 
-const extensionName = "Chronos_Ghost";
+const extensionName = "Chronos_V4_Fix";
 
 let stats = {
     enabled: true,
     lastSavedTokens: 0,
     totalSavedTokens: 0,
-    lastAction: "Ready"
+    debugInfo: "Waiting for action..."
 };
 
 // =================================================================
-// 1. ส่วนดีไซน์ (ลูกแก้วแสดงสถานะ)
+// 1. Regex (หัวใจสำคัญ)
+// =================================================================
+// ใช้แบบกว้างที่สุด: จับตั้งแต่เปิด details ยันปิด details ไม่สนข้างใน
+const universalRegex = /<details[\s\S]*?<\/details>/gi;
+
+// ฟังก์ชันประมาณการโทเคน (1 Token ≈ 3.5 chars)
+const estimateTokens = (chars) => Math.round(chars / 3.5);
+
+// =================================================================
+// 2. UI (ลูกแก้ว + หน้าต่าง Debug)
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
     style.innerHTML = `
-        @keyframes ghost-pulse { 0% { box-shadow: 0 0 5px #00E5FF; } 50% { box-shadow: 0 0 20px #00E5FF, 0 0 10px #fff inset; } 100% { box-shadow: 0 0 5px #00E5FF; } }
-        #ghost-orb {
+        @keyframes orb-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #chronos-orb {
             position: fixed; top: 15vh; right: 20px;
-            width: 50px; height: 50px;
-            background: rgba(0, 0, 0, 0.6);
-            border: 2px solid #00E5FF; border-radius: 50%;
-            z-index: 99999; cursor: pointer;
+            width: 55px; height: 55px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00FF00; border-radius: 50%;
+            z-index: 999999; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            font-size: 24px; color: #00E5FF;
-            transition: all 0.3s; backdrop-filter: blur(5px);
+            font-size: 24px; color: #00FF00;
+            box-shadow: 0 0 10px #00FF00;
+            transition: all 0.3s;
         }
-        #ghost-orb:hover { transform: scale(1.1); background: rgba(0, 229, 255, 0.2); }
-        #ghost-orb.working { animation: ghost-pulse 1s infinite; background: #00E5FF; color: #000; }
-        
-        #ghost-hud {
-            position: fixed; top: 15vh; right: 80px;
-            width: 200px; padding: 10px;
-            background: rgba(10, 20, 30, 0.95);
-            border: 1px solid #00E5FF; border-radius: 8px;
-            color: #fff; font-family: sans-serif; font-size: 12px;
-            display: none; z-index: 99999;
+        #chronos-hud {
+            position: fixed; top: 15vh; right: 85px;
+            width: 250px; padding: 15px;
+            background: #1a1a1a; border: 1px solid #00FF00;
+            color: #fff; font-family: monospace; font-size: 11px;
+            display: none; z-index: 999999;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.8);
+        }
+        .btn-debug {
+            background: #333; color: #fff; border: 1px solid #555;
+            padding: 5px; margin-top: 5px; width: 100%; cursor: pointer;
         }
     `;
     document.head.appendChild(style);
 };
 
-// =================================================================
-// 2. สร้าง UI
-// =================================================================
 const createUI = () => {
-    const old = document.getElementById('ghost-orb');
+    // ลบของเก่าก่อน
+    const old = document.getElementById('chronos-orb');
     if (old) old.remove();
 
     const orb = document.createElement('div');
-    orb.id = 'ghost-orb';
-    orb.innerHTML = '👻';
+    orb.id = 'chronos-orb';
+    orb.innerHTML = '⚡';
     
     const hud = document.createElement('div');
-    hud.id = 'ghost-hud';
+    hud.id = 'chronos-hud';
 
     orb.onclick = () => {
         hud.style.display = (hud.style.display === 'none') ? 'block' : 'none';
@@ -66,100 +75,120 @@ const createUI = () => {
 
 const updateHud = (panel) => {
     panel.innerHTML = `
-        <div style="color: #00E5FF; font-weight: bold; border-bottom: 1px solid #333; margin-bottom:5px;">👻 GHOST PROTOCOL</div>
-        <div>สถานะ: ${stats.lastAction}</div>
-        <div style="margin-top:5px; color: #69F0AE;">
-            รอบล่าสุดประหยัด: <b>${stats.lastSavedTokens}</b> Tokens
-        </div>
-        <div style="margin-top:5px; font-size:10px; color:#aaa;">
-            รวมทั้งหมด: ${stats.totalSavedTokens}
-        </div>
-        <div style="margin-top:8px; font-size:10px; color:#00E5FF; font-style:italic;">
-            *หน้าจอแสดง HTML ปกติ<br>แต่ AI ได้รับแค่ Text*
-        </div>
+        <strong style="color:#00FF00;">CHRONOS DEBUGGER</strong><br>
+        --------------------------<br>
+        STATUS: ${stats.enabled ? "ACTIVE" : "OFF"}<br>
+        LAST SAVE: <b>${stats.lastSavedTokens}</b> Tokens<br>
+        TOTAL SAVE: ${stats.totalSavedTokens} Tokens<br>
+        --------------------------<br>
+        DEBUG INFO:<br>
+        <div style="color:#aaa; word-wrap:break-word;">${stats.debugInfo}</div>
+        <button class="btn-debug" onclick="document.dispatchEvent(new CustomEvent('chronos-check-now'))">
+            🔍 Check Last Message
+        </button>
     `;
 };
 
 // =================================================================
-// 3. Logic สำคัญ: แปลงร่างข้อมูลก่อนส่ง (Transformation)
+// 3. Logic: Ghost Protocol (Send Text, Keep HTML)
 // =================================================================
-const estimateTokens = (chars) => Math.round(chars / 3.5);
-
 const optimizePayload = (data) => {
     if (!stats.enabled) return data;
 
-    // เปลี่ยนลูกแก้วให้เรืองแสง เพื่อบอกว่า "กำลังทำงาน"
-    const orb = document.getElementById('ghost-orb');
-    if (orb) orb.classList.add('working');
-
     let totalCharsSaved = 0;
-    
-    // Regex จับ HTML เฉพาะของคุณ (จับรายละเอียดภายใน)
-    // กลุ่ม 1: Date, กลุ่ม 2: Time, กลุ่ม 3: Weather, กลุ่ม 4: Location, กลุ่ม 5: Music
-    const regex = /<details>[\s\S]*?<summary>(.*?)<\/summary>[\s\S]*?TIME:<\/b>\s*(.*?)<br>[\s\S]*?WEATHER:<\/b>\s*(.*?)<br>[\s\S]*?LOCATION:<\/b>\s*(.*?)<br>[\s\S]*?NOW PLAYING:<\/b>\s*(.*?)[\s\S]*?<\/details>/gi;
+    let matchCount = 0;
 
-    const replacer = (match, dateHtml, time, weather, loc, music) => {
-        // แกะ Text ออกมาจาก HTML tags
-        const dateClean = dateHtml.replace(/<[^>]*>?/gm, '').trim().replace('📅', '').trim();
-        
-        // **นี่คือสิ่งที่ AI จะเห็น** (ข้อความล้วนๆ สั้นๆ)
-        const aiSeeThis = `[Time Window: ${dateClean} | Time: ${time.trim()} | Weather: ${weather.trim()} | Loc: ${loc.trim()} | Music: ${music.trim()}]`;
+    // เปลี่ยนสถานะให้รู้ว่ากำลังทำงาน
+    const orb = document.getElementById('chronos-orb');
+    if(orb) orb.style.borderColor = "yellow";
 
-        // คำนวณความประหยัด
-        totalCharsSaved += (match.length - aiSeeThis.length);
-        
-        return aiSeeThis;
-    };
-
-    // วนลูปแก้ไข "เฉพาะข้อมูลที่จะส่งออก" (data.body.messages)
-    // การแก้ตรงนี้ *ไม่* กระทบหน้าจอ UI ของเรา
+    // วนลูปเช็คข้อความที่จะส่ง (Context)
     if (data.body && data.body.messages) {
-        data.body.messages.forEach(msg => {
-            if (msg.content && msg.content.includes('<details>')) {
-                // แทนที่ HTML เป็น Text ใน Payload
-                msg.content = msg.content.replace(regex, replacer);
+        data.body.messages.forEach((msg, index) => {
+            // ถ้าเจอ <details>
+            if (msg.content && universalRegex.test(msg.content)) {
+                matchCount++;
+                const originalLen = msg.content.length;
                 
-                // Fallback: ถ้า Regex บนจับไม่โดน ให้ใช้ Regex กวาดเรียบ เพื่อกันเหนียว
-                msg.content = msg.content.replace(/<details>[\s\S]*?<\/details>/gi, (match) => {
-                     // เช็คอีกทีว่าถ้ายังเป็น HTML อยู่ให้ยุบทิ้งเลย
-                     if (match.includes('<')) {
-                         totalCharsSaved += (match.length - 13);
-                         return '[Time Window Info]';
-                     }
-                     return match;
+                // --- แปลงร่าง! ---
+                // แทนที่ทั้งก้อนด้วย [Time Window Info]
+                msg.content = msg.content.replace(universalRegex, (match) => {
+                    // พยายามดึงวันที่มาโชว์หน่อย (ถ้ามี)
+                    let summaryText = "";
+                    if (match.includes("summary")) {
+                        const sumMatch = match.match(/<summary>(.*?)<\/summary>/i);
+                        if (sumMatch) summaryText = sumMatch[1].replace(/<[^>]*>/g, "").trim();
+                    }
+                    return summaryText ? `[Time: ${summaryText}]` : `[Time Window]`;
                 });
+
+                const newLen = msg.content.length;
+                totalCharsSaved += (originalLen - newLen);
             }
         });
     }
 
-    // อัปเดตสถิติ
+    // คำนวณผลลัพธ์
     const savedTokens = estimateTokens(totalCharsSaved);
     stats.lastSavedTokens = savedTokens;
     stats.totalSavedTokens += savedTokens;
-    stats.lastAction = "⚡ แปลงข้อมูลสำเร็จ";
+    stats.debugInfo = `Last Send: Found ${matchCount} blocks. Saved ~${savedTokens} toks.`;
 
+    // คืนค่าสี UI
     setTimeout(() => {
-        if (orb) orb.classList.remove('working'); // หยุดเรืองแสง
-        const hud = document.getElementById('ghost-hud');
-        if (hud && hud.style.display === 'block') updateHud(hud); // อัปเดตเลข
-    }, 1000);
+        if(orb) orb.style.borderColor = "#00FF00";
+        const hud = document.getElementById('chronos-hud');
+        if(hud && hud.style.display === 'block') updateHud(hud);
+    }, 500);
 
-    console.log(`[Ghost] Sent optimized text to AI. Saved ~${savedTokens} tokens.`);
-    
     return data;
 };
 
 // =================================================================
-// 4. Start
+// 4. Debug Feature (ปุ่มกดเช็คข้อความ)
+// =================================================================
+const checkLastMessageManually = () => {
+    if (typeof SillyTavern === 'undefined') return;
+    
+    // ดึงประวัติแชทปัจจุบัน
+    const context = SillyTavern.getContext();
+    if (!context || !context.chat || context.chat.length === 0) {
+        stats.debugInfo = "No chat history found.";
+        updateHud(document.getElementById('chronos-hud'));
+        return;
+    }
+
+    const lastMsg = context.chat[context.chat.length - 1];
+    const content = lastMsg.mes || ""; // ข้อความของบอท
+
+    // ลองเทส Regex
+    const found = content.match(universalRegex);
+    
+    if (found) {
+        stats.debugInfo = `✅ FOUND MATCH!<br>Length: ${found[0].length} chars<br>Content Start: ${found[0].substring(0, 20)}...`;
+    } else {
+        stats.debugInfo = `❌ NO MATCH.<br>Last Msg Start: ${content.substring(0, 30)}...<br>(Check if bot uses HTML correctly)`;
+    }
+    
+    updateHud(document.getElementById('chronos-hud'));
+};
+
+// =================================================================
+// 5. Start
 // =================================================================
 injectStyles();
 setTimeout(createUI, 2000);
 
+// Event Listener สำหรับปุ่มใน HUD
+document.addEventListener('chronos-check-now', checkLastMessageManually);
+
 if (typeof SillyTavern !== 'undefined') {
-    // Hook นี้ทำงาน "ก่อน" ส่ง request ไปหา API
-    // เราแก้ข้อมูลตรงนี้ = AI เห็นของใหม่ แต่หน้าจอเรายังเป็นของเดิม
+    // Hook ตอนส่งข้อมูล (Ghost Protocol)
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-    console.log('[Chronos Ghost] Loaded.');
-}
-
+    
+    // แจ้งเตือนเมื่อโหลดเสร็จ (Debug)
+    // alert("Chronos Loaded! Look for the ⚡ Orb."); 
+    console.log('[Chronos V4] Ready.');
+        }
+    
