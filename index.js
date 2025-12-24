@@ -1,16 +1,15 @@
-// index.js - Chronos V45 (Context First Edition) 🛡️👑
-// Logic: Trust ST 'context.tokens' First > Fallback to Snapshots
-// UI: Original Neon Cyclone (V39 Style) + Honest Labels
+// index.js - Chronos V45 (Context King) 👑🛡️
+// Logic: Priority = context.tokens > generate_prompt > payload_fallback
+// UI: Neon Cyclone (V39 Style) with Honest Labels
 
-const extensionName = "Chronos_V45_ContextFirst";
+const extensionName = "Chronos_V45_ContextKing";
 
 // =================================================================
-// 1. GLOBAL STATE (Fallbacks Only)
+// 1. GLOBAL STATE (Secondary Sources)
 // =================================================================
-let FINAL_PROMPT_TOKENS = 0;   // เก็บไว้ดูเล่น / Fallback ยามยาก
-let LAST_PAYLOAD_TOKENS = 0;   // เก็บไว้ดูเล่น / Fallback สุดท้าย
+let FINAL_PROMPT_TOKENS = 0;   // จาก generate_prompt (Debug / Specific Backends)
+let LAST_PAYLOAD_TOKENS = 0;   // จาก request ล่าสุด (Fallback)
 
-// Helper: ดึง Tokenizer
 const getChronosTokenizer = () => {
     try {
         const ctx = SillyTavern.getContext();
@@ -23,21 +22,23 @@ const getChronosTokenizer = () => {
 };
 
 // =================================================================
-// 2. HOOK: Generate Prompt (Keep for Debug/Snapshot)
+// 2. DEBUG HOOK (generate_prompt)
 // =================================================================
+// เก็บไว้เป็น Reference หรือกรณีที่ backend ยิงผ่านจุดนี้จริงๆ
 const chronosAfterPrompt = (data) => {
     try {
         const tokenizer = getChronosTokenizer();
         if (tokenizer && data && typeof data.prompt === 'string') {
             FINAL_PROMPT_TOKENS = tokenizer.encode(data.prompt).length;
-            // console.log(`[Chronos] Generate Prompt Snapshot: ${FINAL_PROMPT_TOKENS}`);
+            // log เบาๆ ไม่ต้องตะโกน
+            // console.debug('[Chronos] Final Prompt captured:', FINAL_PROMPT_TOKENS);
         }
     } catch (e) {}
     return data;
 };
 
 // =================================================================
-// 3. HOOK: Chat Completion (Strip HTML & Fallback Count)
+// 3. PAYLOAD MODIFIER & FALLBACK COUNTER
 // =================================================================
 const stripHtmlToText = (html) => {
     if (!html) return "";
@@ -59,7 +60,7 @@ const optimizePayload = (data) => {
         return text;
     };
 
-    // 1. Modification Phase (Strip HTML)
+    // 1. Modification Phase (ตัด HTML)
     if (data.body?.messages) {
         data.body.messages.forEach(msg => {
             msg.content = processText(msg.content);
@@ -68,24 +69,23 @@ const optimizePayload = (data) => {
         data.body.prompt = processText(data.body.prompt);
     }
 
-    // 2. Counting Phase (Fallback Only)
-    // "Stop joining messages yourself" -> รับทราบครับ ใช้ tokenizer นับ array โดยตรง
+    // 2. Fallback Counting (Lightweight)
+    // เลิก .join() ทั้งหมดตามคำสั่ง เพราะทำให้ค่าเฟ้อ
+    // นับแค่ Prompt หรือข้อความสุดท้ายเพื่อใช้เป็น Fallback ขั้นต่ำ
     try {
         const tokenizer = getChronosTokenizer();
         if (tokenizer) {
-            if (data.body?.messages && typeof tokenizer.countChatTokens === 'function') {
-                // ให้ Tokenizer ของ ST จัดการเรื่อง format เอง
-                LAST_PAYLOAD_TOKENS = tokenizer.countChatTokens(data.body.messages);
-            } else if (data.body?.messages) {
-                // Fallback: นับแยกแล้วบวกกัน (อย่า join string เอง)
-                LAST_PAYLOAD_TOKENS = data.body.messages.reduce((acc, m) => acc + tokenizer.encode(m.content).length, 0);
+            if (data.body?.messages && data.body.messages.length > 0) {
+                // นับแค่ข้อความสุดท้าย (User/Assistant) พอให้รู้ว่ามี Activity
+                const lastMsg = data.body.messages[data.body.messages.length - 1];
+                LAST_PAYLOAD_TOKENS = tokenizer.encode(lastMsg.content).length;
             } else if (typeof data.body?.prompt === 'string') {
                 LAST_PAYLOAD_TOKENS = tokenizer.encode(data.body.prompt).length;
             }
         }
     } catch (e) {}
 
-    // 3. Refresh UI
+    // 3. Trigger UI Refresh
     setTimeout(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && ins.style.display === 'block') renderInspector();
@@ -95,10 +95,10 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 4. LOGIC: Calculate Stats (The Hierarchy of Truth)
+// 4. STATS CALCULATOR (The Hierarchy of Truth)
 // =================================================================
 const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, remaining: 0, saved: 0, max: 0, source: "N/A" };
+    if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, remaining: 0, saved: 0, max: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
@@ -116,26 +116,26 @@ const calculateStats = () => {
     if (validValues.length > 0) maxTokens = Math.max(...validValues);
 
     // --- 2. Load Logic (Priority System) ---
+    // #1: context.tokens (พระเจ้า - ค่าที่ ST คำนวณเสร็จแล้ว)
+    // #2: FINAL_PROMPT (รอง - จาก generate_prompt ถ้ามี)
+    // #3: LAST_PAYLOAD (สำรอง - จาก request ล่าสุด)
+    
     let currentLoad = 0;
-    let activeSource = "Waiting...";
+    let sourceLabel = "Waiting...";
 
-    // Priority 1: Context Tokens (ค่าจริงจาก ST)
     if (context.tokens && context.tokens > 0) {
         currentLoad = context.tokens;
-        activeSource = "ST Context (Official)";
-    }
-    // Priority 2: Generate Prompt (Snapshot ล่าสุด ถ้ามี)
-    else if (FINAL_PROMPT_TOKENS > 0) {
+        sourceLabel = "ST Context (Official)";
+    } else if (FINAL_PROMPT_TOKENS > 0) {
         currentLoad = FINAL_PROMPT_TOKENS;
-        activeSource = "Exact Snapshot (Debug)";
-    }
-    // Priority 3: Payload Fallback (ค่าประมาณการ)
-    else if (LAST_PAYLOAD_TOKENS > 0) {
-        currentLoad = LAST_PAYLOAD_TOKENS;
-        activeSource = "Payload Est. (Fallback)";
+        sourceLabel = "Gen. Prompt (Captured)";
+    } else if (LAST_PAYLOAD_TOKENS > 0) {
+        currentLoad = LAST_PAYLOAD_TOKENS; // Fallback แบบไม่เต็ม (ดีกว่า 0)
+        sourceLabel = "Payload Fallback";
     }
 
-    // --- 3. Saved Estimate (Visualization Only) ---
+    // --- 3. Saved Estimate (Visual Only) ---
+    // ส่วนนี้แยกขาดจาก Logic โหลดจริง เอาไว้โชว์เท่ๆ ว่าตัด HTML ไปได้เท่าไหร่
     let estimatedSavings = 0;
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 2.7);
@@ -153,29 +153,36 @@ const calculateStats = () => {
 
     // --- 4. Final Display Values ---
     const optimizedLoad = currentLoad;
+    // Original Load ตรงนี้เป็นแค่ตัวเลขสมมุติเพื่อการเปรียบเทียบ (Loadจริง + ที่ประหยัดไป)
     const originalLoad = currentLoad + estimatedSavings; 
     const remainingSpace = Math.max(0, maxTokens - optimizedLoad);
 
-    // --- 5. Memory Range Logic ---
+    // --- 5. Memory Range (Estimator) ---
     let memoryRangeText = "-";
-    const systemOverhead = Math.max(0, originalLoad - quickCount(chat.map(m=>m.mes).join('')));
-    const availableForChat = maxTokens - systemOverhead;
+    // ใช้ logic ย้อนกลับเพื่อประมาณการว่าข้อความไหนยังอยู่ใน context
+    // โดยอิงจาก optimizedLoad ที่เราเชื่อถือแล้ว
+    const systemOverheadEstimate = Math.max(0, optimizedLoad - quickCount(chat.map(m=>m.mes).join(''))); 
+    const availableForChat = maxTokens - systemOverheadEstimate; // นี่คือพื้นที่เหลือสำหรับแชทจริงๆ
+    
     let currentFill = 0;
     let startMsgIndex = -1;
     let rememberedCount = 0;
     
     for (let i = chat.length - 1; i >= 0; i--) {
         let msgToken = quickCount(chat[i].mes);
+        // เช็คแบบละเอียดว่าตัด HTML หรือไม่
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(chat[i].mes)) {
             const clean = stripHtmlToText(chat[i].mes);
             msgToken = quickCount(`[System Content:\n${clean}]`);
         }
+
+        // ถ้ายัดลง ก็จำ
         if (currentFill + msgToken <= availableForChat) {
             currentFill += msgToken;
             startMsgIndex = i;
             rememberedCount++;
         } else {
-            break;
+            break; 
         }
     }
 
@@ -192,12 +199,12 @@ const calculateStats = () => {
         remaining: remainingSpace,
         saved: estimatedSavings,
         max: maxTokens,
-        source: activeSource
+        source: sourceLabel
     };
 };
 
 // =================================================================
-// 5. UI SYSTEM (V39 STYLE + New Labels)
+// 5. UI SYSTEM (V39 Neon Cyclone - Honest Labels)
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
@@ -294,9 +301,10 @@ const renderInspector = () => {
                 </div>`;
     }).join('');
 
+    // Update UI text as requested
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V45 (Context First)</span>
+            <span>🚀 CHRONOS V45 (Context King)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -312,7 +320,7 @@ const renderInspector = () => {
             </div>
             
             <div class="dash-row">
-                <span style="color:#aaa;">🛡️ Tokens Saved</span>
+                <span style="color:#aaa;">🛡️ Tokens Saved (Est.)</span>
                 <span class="dash-val" style="color:#00E676;">-${stats.saved} toks</span>
             </div>
 
@@ -326,7 +334,7 @@ const renderInspector = () => {
             </div>
             
             <div style="text-align:right; font-size:9px; color:#555; margin-top:3px;">
-                Source: ${stats.source}
+                Src: ${stats.source}
             </div>
         </div>
 
@@ -430,8 +438,6 @@ window.viewAIVersion = (index) => {
         </div>
         <div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>
         <div class="stat-badge">
-            <span style="color:#aaa;">Raw: ${rawTokens}</span>
-            <span style="color:#00E676;">Sent: ${cleanTokens}</span>
             <span style="color:#E040FB;">Saved: -${saved}</span>
         </div>
     `;
@@ -442,4 +448,18 @@ window.viewAIVersion = (index) => {
 // =================================================================
 (function() {
     injectStyles();
-    setTimeout
+    setTimeout(createUI, 2000); 
+
+    if (typeof SillyTavern !== 'undefined') {
+        console.log(`[${extensionName}] Ready. Priority: Context > GeneratePrompt > Payload.`);
+        
+        // Hook generate_prompt (Priority #2 - For Debug/Specific Backends)
+        SillyTavern.extension_manager.register_hook('generate_prompt', chronosAfterPrompt);
+        
+        // Hook request (Priority #3 - Fallback & HTML Mod)
+        SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
+        SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
+    } else {
+        console.warn(`[${extensionName}] SillyTavern object not found.`);
+    }
+})();
