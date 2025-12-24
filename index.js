@@ -1,9 +1,16 @@
-// index.js - Chronos V24 (Context Manager & Real Stats) 🏙️📊
 
-const extensionName = "Chronos_V24_Manager";
+// index.js - Chronos V26 (The Calibrator) 🇹🇭🎛️
+
+const extensionName = "Chronos_V26_Calibrator";
+
+// ค่าตัวหารเริ่มต้น (ปรับได้ในหน้าต่าง)
+let calibration = {
+    thaiDivisor: 1.3,  // ภาษาไทย: 1 Token ≈ 1.3 ตัวอักษร
+    engDivisor: 3.5    // อังกฤษ: 1 Token ≈ 3.5 ตัวอักษร
+};
 
 // =================================================================
-// 1. Logic: Stripper & Token Estimation
+// 1. Logic: Stripper (ล้างโค้ด)
 // =================================================================
 const stripHtmlToText = (html) => {
     let text = html.replace(/<br\s*\/?>/gi, '\n')
@@ -16,64 +23,71 @@ const stripHtmlToText = (html) => {
     return text;
 };
 
-// ประมาณการ (Token โดยเฉลี่ย)
-const estimateTokens = (chars) => Math.round(chars / 3.2); 
+// =================================================================
+// 2. Logic: Configurable Token Estimator (ตัวนับแบบปรับจูนได้)
+// =================================================================
+const estimateTokens = (text) => {
+    if (!text) return 0;
+    
+    // แยกนับ
+    const thaiChars = (text.match(/[\u0E00-\u0E7F]/g) || []).length;
+    const otherChars = text.length - thaiChars;
+
+    // ใช้ค่าจากตัวแปร Calibration
+    const thaiTokens = Math.round(thaiChars / calibration.thaiDivisor);
+    const otherTokens = Math.round(otherChars / calibration.engDivisor);
+
+    return thaiTokens + otherTokens;
+};
 
 // =================================================================
-// 2. Logic: Context Calculator (ระบบคำนวณความจำ)
+// 3. Logic: Context Calculator
 // =================================================================
 const calculateRealContext = () => {
     if (typeof SillyTavern === 'undefined') return { used: 0, max: 0, count: 0, total: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
-    
-    // ดึงค่า Max Context จากการตั้งค่าของ SillyTavern (ถ้าหาไม่เจอใช้ค่า Default 8192)
-    // หมายเหตุ: การดึงค่านี้อาจแตกต่างไปตามเวอร์ชัน ST แต่ส่วนใหญ่จะอยู่ใน context object
     const maxTokens = context.max_context || 8192; 
     
-    let currentTokens = 0;
+    // 1. Base Tokens (Card + System)
+    let baseTokens = 0;
+    if (context.characterId && SillyTavern.characters && SillyTavern.characters[context.characterId]) {
+        const char = SillyTavern.characters[context.characterId];
+        const baseText = (char.description || "") + (char.first_mes || "") + (char.personality || "") + (char.scenario || "");
+        baseTokens = estimateTokens(baseText) + 500; // +System Prompt
+    }
+    
+    // 2. Chat History
+    let currentTokens = baseTokens;
     let rememberedMsgCount = 0;
 
-    // วนลูปจาก "ข้อความล่าสุด" ย้อนกลับไปหา "อดีต" (เหมือนวิธีที่ AI จำ)
     for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
-        
-        // จำลองการตัดโค้ด
         let content = msg.mes;
         if (content.includes('<') && content.includes('>')) {
             const clean = stripHtmlToText(content);
             content = `[System Content:\n${clean}]`;
         }
         
-        // บวก System Prompt Overhead นิดหน่อย (เผื่อไว้)
-        const tokens = estimateTokens(content.length) + 10; 
-
-        // ถ้ายังไม่เกินขีดจำกัด
+        const tokens = estimateTokens(content) + 5;
         if (currentTokens + tokens < maxTokens) {
             currentTokens += tokens;
             rememberedMsgCount++;
         } else {
-            // ถ้าเกินแล้ว หยุดนับ (เพราะ AI จะลืมข้อความที่เก่ากว่านี้)
             break;
         }
     }
 
-    return {
-        used: currentTokens,
-        max: maxTokens,
-        count: rememberedMsgCount,
-        totalMsgs: chat.length
-    };
+    return { used: currentTokens, max: maxTokens, count: rememberedMsgCount, totalMsgs: chat.length };
 };
 
 // =================================================================
-// 3. UI: Styles
+// 4. UI: Calibrator Dashboard
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
     style.innerHTML = `
-        /* --- ลูกแก้วพายุหมุน --- */
         #chronos-orb {
             position: fixed; top: 150px; right: 20px;
             width: 35px; height: 35px;
@@ -89,7 +103,6 @@ const injectStyles = () => {
         #chronos-orb:hover { border-color: #00E676; color: #00E676; box-shadow: 0 0 25px #00E676; }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        /* --- หน้าต่าง Inspector --- */
         #chronos-inspector {
             position: fixed; top: 100px; right: 70px; width: 320px; 
             background: rgba(15, 0, 20, 0.98); border: 2px solid #D500F9;
@@ -108,31 +121,31 @@ const injectStyles = () => {
             border-bottom: 1px solid #550077; font-size: 10px; color: #00E676;
         }
         
-        /* --- Dashboard Zone (ส่วนใหม่) --- */
-        .dashboard-zone {
-            background: #000; padding: 10px; border-bottom: 1px solid #333;
+        /* Zone ปรับจูน (Calibration) */
+        .calib-zone {
+            background: #111; padding: 10px; border-bottom: 1px solid #333;
         }
+        .calib-row { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
+        .calib-input { background: #000; border: 1px solid #555; color: #fff; width: 40px; text-align: center; }
+        
+        .dashboard-zone { background: #000; padding: 10px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
         .progress-bg { width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 5px; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, #00E676, #00C853); width: 0%; transition: width 0.5s; }
         
-        /* --- Body --- */
         .ins-body { padding: 10px; }
         .search-row { display: flex; gap: 5px; margin-bottom: 10px; }
         .search-input { background: #222; border: 1px solid #D500F9; color: #fff; padding: 3px; width: 50px; border-radius: 3px; }
         .search-btn { background: #D500F9; color: #000; border: none; padding: 3px 8px; cursor: pointer; border-radius: 3px; font-weight:bold;}
-        
         .msg-list { max-height: 100px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #111; }
         .msg-item { padding: 5px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #aaa; }
         .msg-item:hover { background: #330044; color: #fff; }
-
         .view-area { background: #000; color: #00E676; padding: 8px; height: 120px; overflow-y: auto; font-size: 10px; white-space: pre-wrap; border: 1px solid #5c007a; border-radius: 4px; }
         .stat-badge { display: flex; justify-content: space-between; margin-top: 5px; background: #222; padding: 5px; border-radius: 4px; }
     `;
     document.head.appendChild(style);
 };
 
-// Config การลาก
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
 const createUI = () => {
@@ -165,15 +178,10 @@ const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     const chat = SillyTavern.getContext().chat || [];
     
-    // --- 1. คำนวณ Context จริง ---
     const stats = calculateRealContext();
     const percent = Math.min((stats.used / stats.max) * 100, 100);
-    const memoryDepth = stats.count; // จำนวนข้อความที่จำได้
 
-    // --- 2. สร้าง HTML ---
-    
-    // List ข้อความล่าสุด
-    let listHtml = chat.slice(-5).reverse().map((msg, i) => { // ลดเหลือ 5 อันพอกระชับ
+    let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
         const preview = msg.mes.substring(0, 20).replace(/</g, '&lt;');
         return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">#${actualIdx} ${msg.is_user ? '👤' : '🤖'} ${preview}...</div>`;
@@ -181,7 +189,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>📊 REAL CONTEXT STATS</span>
+            <span>🎛️ CALIBRATION MODE</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -190,20 +198,27 @@ const renderInspector = () => {
             <label style="display:flex;gap:5px;cursor:pointer;"><input type="checkbox" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}>🔓Win</label>
         </div>
 
+        <div class="calib-zone">
+            <div style="color:#E040FB; margin-bottom:5px;">ตั้งค่าตัวหาร (Divisor):</div>
+            <div class="calib-row">
+                <span>🇹🇭 ไทย:</span>
+                <input type="number" step="0.1" value="${calibration.thaiDivisor}" class="calib-input" onchange="updateCalib('thai', this.value)">
+                <span style="color:#aaa; font-size:9px;">(ยิ่งน้อย = เลขยิ่งเยอะ)</span>
+            </div>
+            <div class="calib-row">
+                <span>🇺🇸 Eng:</span>
+                <input type="number" step="0.1" value="${calibration.engDivisor}" class="calib-input" onchange="updateCalib('eng', this.value)">
+            </div>
+            <button onclick="renderInspector()" style="width:100%; margin-top:5px; background:#333; color:#fff; border:none; cursor:pointer;">🔄 คำนวณใหม่</button>
+        </div>
+
         <div class="dashboard-zone">
             <div class="dash-row">
-                <span style="color:#aaa;">Real Usage (No HTML):</span>
+                <span style="color:#aaa;">Est. Usage:</span>
                 <span style="color:#00E676;">${stats.used} / ${stats.max} Tok</span>
             </div>
             <div class="progress-bg">
                 <div class="progress-fill" style="width: ${percent}%"></div>
-            </div>
-            <div class="dash-row" style="margin-top:8px;">
-                <span style="color:#aaa;">ความจำ (Memory):</span>
-                <span style="color:#E040FB;">${memoryDepth} ข้อความล่าสุด</span>
-            </div>
-            <div style="font-size:9px; color:#555; text-align:right;">
-                (จากทั้งหมด ${stats.totalMsgs} ข้อความ)
             </div>
         </div>
 
@@ -213,16 +228,21 @@ const renderInspector = () => {
                 <input type="number" id="chronos-search-id" class="search-input" placeholder="ID">
                 <button class="search-btn" onclick="searchById()">Check</button>
             </div>
-
             <div class="msg-list">${listHtml}</div>
-            <div id="view-target">
-                <div style="color:#555; text-align:center; margin-top:20px;">เลือกข้อความเพื่อดูไส้ใน</div>
-            </div>
+            <div id="view-target"></div>
         </div>
     `;
 };
 
-// --- Drag System ---
+// ฟังก์ชันอัปเดตค่า Calibration
+window.updateCalib = (type, value) => {
+    const val = parseFloat(value);
+    if (val > 0) {
+        if (type === 'thai') calibration.thaiDivisor = val;
+        if (type === 'eng') calibration.engDivisor = val;
+    }
+};
+
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
     if (type === 'panel') {
@@ -238,32 +258,25 @@ const makeDraggable = (elm, type) => {
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
+        const clientX = e.clientX || e.touches[0].clientX; const clientY = e.clientY || e.touches[0].clientY;
         pos3 = clientX; pos4 = clientY;
         document.onmouseup = dragEnd; document.onmousemove = dragAction;
         document.ontouchend = dragEnd; document.ontouchmove = dragAction;
         elm.setAttribute('data-dragging', 'true');
     };
     const dragAction = (e) => {
-        const clientX = e.clientX || e.touches[0].clientX;
-        const clientY = e.clientY || e.touches[0].clientY;
-        pos1 = pos3 - clientX; pos2 = pos4 - clientY;
-        pos3 = clientX; pos4 = clientY;
-        elm.style.top = (elm.offsetTop - pos2) + "px";
-        elm.style.left = (elm.offsetLeft - pos1) + "px";
+        const clientX = e.clientX || e.touches[0].clientX; const clientY = e.clientY || e.touches[0].clientY;
+        pos1 = pos3 - clientX; pos2 = pos4 - clientY; pos3 = clientX; pos4 = clientY;
+        elm.style.top = (elm.offsetTop - pos2) + "px"; elm.style.left = (elm.offsetLeft - pos1) + "px";
         e.preventDefault();
     };
     const dragEnd = () => {
-        document.onmouseup = null; document.onmousemove = null;
-        document.ontouchend = null; document.ontouchmove = null;
+        document.onmouseup = null; document.onmousemove = null; document.ontouchend = null; document.ontouchmove = null;
         setTimeout(() => elm.setAttribute('data-dragging', 'false'), 100);
     };
     elm.onmousedown = dragStart; elm.ontouchstart = dragStart;
 };
 
-// --- Inspector Logic ---
 window.searchById = () => {
     const id = parseInt(document.getElementById('chronos-search-id').value);
     const chat = SillyTavern.getContext().chat || [];
@@ -274,10 +287,10 @@ window.searchById = () => {
 window.viewAIVersion = (index) => {
     const chat = SillyTavern.getContext().chat;
     const msg = chat[index].mes;
-    const rawTokens = estimateTokens(msg.length);
+    const rawTokens = estimateTokens(msg);
     const cleanText = stripHtmlToText(msg);
     const aiViewText = `[System Content:\n${cleanText}]`;
-    const cleanTokens = estimateTokens(aiViewText.length);
+    const cleanTokens = estimateTokens(aiViewText);
     const saved = rawTokens - cleanTokens;
 
     document.getElementById('view-target').innerHTML = `
@@ -291,7 +304,6 @@ window.viewAIVersion = (index) => {
     `;
 };
 
-// --- Execution Hook ---
 const optimizePayload = (data) => {
     const process = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) return `[System Content:\n${stripHtmlToText(text)}]`;
@@ -307,5 +319,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-}
-
+                                                    }
+            
