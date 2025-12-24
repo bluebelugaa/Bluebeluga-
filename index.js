@@ -1,9 +1,9 @@
-// index.js - Chronos V37 (The Final Form) 🏙️🧠
+// index.js - Chronos V38 (Gemini Optimized) ♊💎
 
-const extensionName = "Chronos_V37_Final";
+const extensionName = "Chronos_V38_GeminiOpt";
 
 // =================================================================
-// 1. Logic: Tokenizer Wrapper (ใช้ระบบนับของ SillyTavern)
+// 1. Logic: Tokenizer (ใช้ของระบบ SillyTavern 100%)
 // =================================================================
 const getSysTokenCount = (text) => {
     if (!text) return 0;
@@ -33,39 +33,40 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. Logic: Calculator (คำนวณตามโจทย์ใหม่)
+// 2. Logic: Calculator (สูตรคำนวณใหม่ตามสั่ง)
 // =================================================================
 const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { memoryRange: "N/A", used: 0, remaining: 0, saved: 0, max: 0 };
+    if (typeof SillyTavern === 'undefined') return { raw: 0, real: 0, free: 0, max: 0, memoryRange: "N/A" };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
 
-    // --- 1. ดึง Max Context (จากหน้าจอโดยตรง) ---
-    // พยายามดึงจากช่อง Setting ก่อน เพื่อให้ตรงกับที่ตาเห็น
+    // --- 1. Max Context (Total ที่ตั้งค่าไว้) ---
     let maxTokens = 0;
     const maxInput = document.getElementById('max_context');
     if (maxInput) {
         maxTokens = parseInt(maxInput.value);
     } else {
-        maxTokens = context.max_context || 8192; // Fallback
+        maxTokens = context.max_context || 8192;
     }
 
-    // --- 2. ดึงยอดปัจจุบันจากระบบ (Raw Total) ---
-    let systemRawTotal = context.tokens || 0;
-    // Fallback ดึงจาก Bar ด้านบนถ้าหาไม่เจอ
-    if (systemRawTotal === 0 && document.getElementById('token_count_bar')) {
+    // --- 2. Raw Used (นับรวมทุกอย่าง: Chat, Card, Lorebook, Jailbreak) ---
+    // context.tokens คือยอดรวมที่ SillyTavern คำนวณเตรียมส่ง API
+    let rawUsed = context.tokens || 0;
+    
+    // Fallback: ดึงจาก UI Bar ถ้าหาตัวแปรไม่เจอ
+    if (rawUsed === 0 && document.getElementById('token_count_bar')) {
         const text = document.getElementById('token_count_bar').innerText;
         const match = text.match(/(\d+)/);
-        if (match) systemRawTotal = parseInt(match[1]);
+        if (match) rawUsed = parseInt(match[1]);
     }
 
-    // --- 3. คำนวณยอด Real Used & Savings ---
+    // --- 3. Savings (คำนวณส่วนต่าง HTML ที่เราจะตัดออก) ---
     let totalSaved = 0;
-    let chatRealSizes = []; // เก็บขนาดจริงของแต่ละข้อความไว้คำนวณ Memory
+    let chatRealSizes = [];
 
     chat.forEach((msg, index) => {
-        const rawLen = getSysTokenCount(msg.mes) + 5; // +5 metadata
+        const rawLen = getSysTokenCount(msg.mes) + 5; 
         
         let cleanContent = msg.mes;
         if (cleanContent.includes('<') && cleanContent.includes('>')) {
@@ -74,54 +75,49 @@ const calculateStats = () => {
         }
         const realLen = getSysTokenCount(cleanContent) + 5;
         
-        // เก็บขนาดจริงไว้คำนวณ Memory
         chatRealSizes.push({ index: index, size: realLen });
 
         const diff = Math.max(0, rawLen - realLen);
         totalSaved += diff;
     });
 
-    const realUsed = Math.max(0, systemRawTotal - totalSaved);
-    const remaining = Math.max(0, maxTokens - realUsed);
+    // --- 4. Real Used (ใช้จริงหลังตัด) ---
+    const realUsed = Math.max(0, rawUsed - totalSaved);
 
-    // --- 4. คำนวณ Memory Range (จำได้จากไหนถึงไหน) ---
-    // Base Tokens (System/Card) = RealUsed - (ผลรวมแชททั้งหมด)
+    // --- 5. Free (คงเหลือ) ---
+    const freeTokens = Math.max(0, maxTokens - realUsed);
+
+    // --- 6. Memory Range ---
+    // (คำนวณคร่าวๆ ว่าด้วยยอด Real นี้ จำได้ถึงข้อความไหน)
+    // Base Tokens = RealUsed - (ผลรวมแชททั้งหมด)
     const totalChatRealSum = chatRealSizes.reduce((sum, item) => sum + item.size, 0);
     const baseTokens = Math.max(0, realUsed - totalChatRealSum);
     
     let currentLoad = baseTokens;
     let startMsgIndex = 0;
-    
-    // วนลูปจาก "ล่าสุด" ย้อนกลับไป "อดีต"
-    // เพื่อดูว่า Memory เต็มที่ข้อความไหน
     let rememberedCount = 0;
+
     for (let i = chatRealSizes.length - 1; i >= 0; i--) {
-        const msgSize = chatRealSizes[i].size;
-        if (currentLoad + msgSize <= maxTokens) {
-            currentLoad += msgSize;
-            startMsgIndex = chatRealSizes[i].index; // จำข้อความนี้ได้
+        if (currentLoad + chatRealSizes[i].size <= maxTokens) {
+            currentLoad += chatRealSizes[i].size;
+            startMsgIndex = chatRealSizes[i].index;
             rememberedCount++;
         } else {
-            break; // เต็มแล้ว หยุดนับ
+            break;
         }
     }
 
-    // สร้างข้อความแสดงผลช่วง
     let memoryRangeText = "";
-    if (chat.length === 0) {
-        memoryRangeText = "ยังไม่มีข้อความ";
-    } else if (rememberedCount === chat.length) {
-        memoryRangeText = `All (#0 - #${chat.length - 1})`;
-    } else {
-        memoryRangeText = `#${startMsgIndex} ➔ #${chat.length - 1}`;
-    }
+    if (chat.length === 0) memoryRangeText = "-";
+    else if (rememberedCount === chat.length) memoryRangeText = `All (#0 - #${chat.length - 1})`;
+    else memoryRangeText = `#${startMsgIndex} ➔ #${chat.length - 1}`;
 
     return {
-        memoryRange: memoryRangeText,
-        used: realUsed,
-        remaining: remaining,
-        saved: totalSaved,
-        max: maxTokens
+        raw: rawUsed,
+        real: realUsed,
+        free: freeTokens,
+        max: maxTokens,
+        memoryRange: memoryRangeText
     };
 };
 
@@ -152,7 +148,7 @@ const injectStyles = () => {
         .control-zone { display: flex; gap: 10px; padding: 5px 10px; background: #220033; border-bottom: 1px solid #550077; font-size: 10px; color: #00E676; }
         
         .dashboard-zone { background: #000; padding: 12px; border-bottom: 1px solid #333; }
-        .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
+        .dash-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; align-items: center; }
         
         .progress-bg { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 5px; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, #00E676, #00C853); width: 0%; transition: width 0.5s; }
@@ -166,8 +162,16 @@ const injectStyles = () => {
         .msg-item { padding: 5px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #aaa; }
         .msg-item:hover { background: #330044; color: #fff; }
         
+        /* แก้ไข CSS ให้ข้อความไม่ล้น */
         #view-target-wrapper { margin-top:10px; border-top:1px solid #333; padding-top:10px; display:none; }
-        .view-area { background: #000; color: #00E676; padding: 8px; height: 120px; overflow-y: auto; font-size: 10px; white-space: pre-wrap; border: 1px solid #5c007a; border-radius: 4px; }
+        .view-area { 
+            background: #000; color: #00E676; padding: 8px; height: 120px; 
+            overflow-y: auto; overflow-x: hidden;
+            font-size: 10px; 
+            white-space: pre-wrap;      /* รักษารูปแบบบรรทัด */
+            word-wrap: break-word;      /* ตัดคำเมื่อสุดขอบ */
+            border: 1px solid #5c007a; border-radius: 4px; 
+        }
         .stat-badge { display: flex; justify-content: space-between; margin-top: 5px; background: #222; padding: 5px; border-radius: 4px; }
     `;
     document.head.appendChild(style);
@@ -195,7 +199,7 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    const percent = stats.max > 0 ? Math.min((stats.used / stats.max) * 100, 100) : 0;
+    const percent = stats.max > 0 ? Math.min((stats.real / stats.max) * 100, 100) : 0;
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -205,7 +209,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>CHRONOS V37 (FINAL)</span>
+            <span>GEMINI OPTIMIZER V38</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -215,22 +219,32 @@ const renderInspector = () => {
         </div>
 
         <div class="dashboard-zone">
-            <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 5px;">
-                <span style="color:#aaa;">🧠 Memory Range:</span>
+            <div class="dash-row">
+                <span style="color:#aaa;">🧠 Mem:</span>
                 <b style="color:#E040FB;">${stats.memoryRange}</b>
             </div>
             
-            <div class="dash-row" style="margin-top: 8px;">
-                <span style="color:#00E676;">Used: ${stats.used}</span>
-                <span style="color:#FF9800;">Free: ${stats.remaining}</span>
+            <div class="dash-row">
+                <span style="color:#FF9800;">Raw (รวมโค้ด):</span>
+                <b style="color:#FF9800;">${stats.raw}</b>
             </div>
+            
+            <div class="dash-row">
+                <span style="color:#00E676;">Real (ตัดแล้ว):</span>
+                <b style="color:#00E676;">${stats.real}</b>
+            </div>
+
+             <div class="dash-row" style="margin-top:5px; border-top:1px solid #333; padding-top:5px;">
+                <span style="color:#aaa;">Free (เหลือ):</span>
+                <b style="color:#fff;">${stats.free}</b>
+            </div>
+
             <div class="progress-bg">
                 <div class="progress-fill" style="width: ${percent}%"></div>
             </div>
             
-            <div class="dash-row" style="margin-top: 5px; font-size: 10px; color:#555;">
-                <span>Total: ${stats.max}</span>
-                <span>Saved: -${stats.saved}</span>
+            <div style="font-size:9px; color:#555; text-align:right; margin-top:2px;">
+                Total (Setting): ${stats.max}
             </div>
         </div>
 
@@ -240,7 +254,7 @@ const renderInspector = () => {
                 <button class="search-btn" onclick="searchById()">Check</button>
             </div>
             
-            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Recent:</div>
+            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Recent (Click to view):</div>
             <div class="msg-list">${listHtml}</div>
             
             <div id="view-target-wrapper">
@@ -346,5 +360,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-}
-
+                                                                                                                                    }
+            
