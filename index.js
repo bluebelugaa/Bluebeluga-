@@ -1,13 +1,15 @@
-// index.js - Chronos V60 (Final Fusion) 💎🌌
-// UI: Neon V47 (Strictly Preserved)
-// Logic: V59 Smart Counter + Manual Input Field
+// index.js - Chronos V61 (Absolute Fix) 🛠️💎
+// Fixes: "Orb not showing" by using safe DOM methods & Max Z-Index
+// UI: Neon V47 Style (Preserved)
+// Feature: Manual Limit Input Field
 
-const extensionName = "Chronos_V60_FinalFusion";
+const extensionName = "Chronos_V61_Absolute";
 
 // =================================================================
-// 1. GLOBAL STATE
+// 1. GLOBAL STATE (Moved to top for safety)
 // =================================================================
-let userManualLimit = 0; // ค่าที่คุณกรอกเอง
+let userManualLimit = 0; 
+let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
 const getChronosTokenizer = () => {
     try {
@@ -30,7 +32,7 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. HOOKS (Smart Logic)
+// 2. HOOKS
 // =================================================================
 const optimizePayload = (data) => {
     const processText = (text) => {
@@ -52,7 +54,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (V59 Logic)
+// 3. CALCULATOR
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -74,10 +76,10 @@ const calculateStats = () => {
         }
     });
 
-    // --- B. BASE LOAD (Logic "ตัวหน้า" ที่แม่นยำจาก V59) ---
+    // --- B. BASE LOAD (DOM Sync) ---
     let stTotalTokens = context.tokens || 0;
     
-    // Fallback: Read DOM if ST returns 0
+    // Fallback: Read DOM
     if (stTotalTokens === 0) {
         const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
         if (tokenCounterEl) {
@@ -89,20 +91,19 @@ const calculateStats = () => {
             }
         }
     }
-    // Final Fallback: Manual Count
+    // Final Fallback
     if (stTotalTokens === 0 && chat.length > 0) {
          let manualChat = 0;
          chat.forEach(m => manualChat += quickCount(m.mes));
          stTotalTokens = manualChat + 2000;
     }
 
-    // --- C. MAX CONTEXT (Manual Input Priority) ---
+    // --- C. MAX CONTEXT ---
     let maxTokens = 8192;
 
     if (userManualLimit > 0) {
         maxTokens = userManualLimit;
     } else {
-        // Auto logic as backup
         const isUnlocked = SillyTavern.settings?.unlock_context || SillyTavern.settings?.unlocked_context;
         if (isUnlocked) {
             if (SillyTavern.settings?.context_size > 8192) maxTokens = parseInt(SillyTavern.settings.context_size);
@@ -132,7 +133,7 @@ const calculateStats = () => {
 };
 
 // =================================================================
-// 4. UI RENDERER (V47 Structure + Input Field)
+// 4. UI RENDERER
 // =================================================================
 window.updateManualLimit = (val) => {
     userManualLimit = parseInt(val);
@@ -143,7 +144,6 @@ const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
-    // Scroll Lock Logic (From V47)
     const msgListEl = ins.querySelector('.msg-list');
     const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
 
@@ -165,10 +165,9 @@ const renderInspector = () => {
     const inputValue = userManualLimit > 0 ? userManualLimit : '';
     const placeholder = stats.source === 'Auto' ? fmt(stats.max) : 'Auto';
 
-    // HTML Structure based on V47 + Input Field
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V60 (Polished)</span>
+            <span>🚀 CHRONOS V61 (Input)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -228,35 +227,35 @@ const renderInspector = () => {
 };
 
 // =================================================================
-// 5. STYLES (Strictly V47 Style)
+// 5. STYLES (Fixed Z-Index & Positioning)
 // =================================================================
-let dragConfig = { orbUnlocked: false, panelUnlocked: false };
-
 const injectStyles = () => {
     const style = document.createElement('style');
     style.innerHTML = `
-        /* ORB STYLES */
+        /* ORB */
         #chronos-orb {
             position: fixed; top: 150px; right: 20px; width: 40px; height: 40px;
             background: radial-gradient(circle, rgba(20,0,30,0.9) 0%, rgba(0,0,0,1) 100%);
             border: 2px solid #D500F9; border-radius: 50%;
-            z-index: 999999; cursor: pointer; display: flex; align-items: center; justify-content: center;
+            z-index: 2147483647; /* MAX Z-INDEX */
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
             font-size: 20px; color: #E040FB; 
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6), inset 0 0 10px rgba(213, 0, 249, 0.3);
             user-select: none; 
             animation: spin-slow 4s linear infinite;
-            transition: transform 0.2s;
         }
         #chronos-orb:hover { transform: scale(1.1); border-color: #00E676; color: #00E676; box-shadow: 0 0 25px #00E676; }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        /* INSPECTOR PANEL */
+        /* INSPECTOR */
         #chronos-inspector {
             position: fixed; top: 80px; right: 70px; width: 320px; 
             background: rgba(10, 10, 12, 0.95); 
             border: 1px solid #D500F9; border-top: 3px solid #D500F9;
             color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 12px;
-            display: none; z-index: 999999; border-radius: 8px;
+            display: none; 
+            z-index: 2147483647; /* MAX Z-INDEX */
+            border-radius: 8px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.8); backdrop-filter: blur(10px);
             overflow: hidden;
         }
@@ -290,6 +289,9 @@ const injectStyles = () => {
     document.head.appendChild(style);
 };
 
+// =================================================================
+// 6. DRAG UTILS
+// =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
     if (type === 'panel') {
@@ -340,7 +342,8 @@ window.searchById = () => {
 };
 
 window.viewAIVersion = (index) => {
-    const chat = SillyTavern.getContext().chat || [];
+    const context = SillyTavern.getContext(); 
+    const chat = context.chat || [];
     const msg = chat[index];
     if (!msg) return;
 
@@ -378,14 +381,35 @@ window.viewAIVersion = (index) => {
 };
 
 // =================================================================
-// 6. INITIALIZATION
+// 7. INITIALIZATION
 // =================================================================
+const createUI = () => {
+    // ลบของเก่าออกก่อนสร้างใหม่
+    const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
+    const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
+
+    const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
+    const ins = document.createElement('div'); ins.id = 'chronos-inspector';
+    
+    // ใช้ appendChild เพื่อความปลอดภัยสูงสุดในทุกเบราว์เซอร์
+    document.body.appendChild(orb); 
+    document.body.appendChild(ins);
+    
+    orb.onclick = (e) => {
+        if (orb.getAttribute('data-dragging') === 'true') return;
+        ins.style.display = (ins.style.display === 'none') ? 'block' : 'none';
+        if (ins.style.display === 'block') renderInspector();
+    };
+
+    makeDraggable(orb, 'orb'); makeDraggable(ins, 'panel');
+};
+
 (function() {
     injectStyles();
     setTimeout(createUI, 2000); 
 
     if (typeof SillyTavern !== 'undefined') {
-        console.log(`[${extensionName}] Ready. Live Monitoring + Manual Input.`);
+        console.log(`[${extensionName}] Ready. Absolute Fix Mode.`);
         
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
@@ -397,6 +421,8 @@ window.viewAIVersion = (index) => {
                 renderInspector();
             }
         }, 2000);
+    } else {
+        console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
-    
+        
