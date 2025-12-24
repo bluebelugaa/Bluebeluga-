@@ -1,8 +1,9 @@
-// index.js - Chronos V55 (Direct Memory) 🧠⚡
-// Logic: Bypasses HTML inputs entirely. Reads 'SillyTavern.settings.context_size' directly.
-// Fixes: 8192 stuck issue caused by hidden input fields.
 
-const extensionName = "Chronos_V55_DirectMemory";
+// index.js - Chronos V55 (Deep DOM Hunter) 🏹
+// Logic: Aggressive check for 'context_size' in Settings object first
+// Fixes: 8192 stuck issue by prioritizing internal variables over HTML DOM
+
+const extensionName = "Chronos_V55_DeepHunter";
 
 // =================================================================
 // 1. HELPERS
@@ -50,7 +51,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. DIRECT MEMORY CALCULATOR (THE FINAL FIX)
+// 3. HUNTER CALCULATOR (SETTINGS PRIORITY)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Loading...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -72,7 +73,7 @@ const calculateStats = () => {
         }
     });
 
-    // --- B. BASE LOAD (DOM SYNC) ---
+    // --- B. BASE LOAD ---
     let stTotalTokens = context.tokens || 0;
     const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
     if (tokenCounterEl) {
@@ -89,35 +90,44 @@ const calculateStats = () => {
          stTotalTokens = manualChat + 2000;
     }
 
-    // --- C. TRUE MAX (DIRECT MEMORY ACCESS) ---
-    // เจาะเอาจาก Variable ของระบบโดยตรง ไม่สน HTML
-    let maxTokens = 8192; 
+    // --- C. MAX CONTEXT HUNTER (NEW LOGIC) ---
+    let maxTokens = 8192; // Default
+    const candidates = [];
 
+    // 1. Check Internal Settings (Most Reliable)
     if (SillyTavern.settings) {
-        // เช็คว่า Unlock อยู่ไหม
-        const unlocked = SillyTavern.settings.unlock_context || SillyTavern.settings.unlocked_context;
-        
-        if (unlocked) {
-            // ถ้า Unlock ให้ใช้ context_size (ค่า Slider จริง)
-            if (SillyTavern.settings.context_size) {
-                maxTokens = parseInt(SillyTavern.settings.context_size);
-            }
-        } else {
-            // ถ้าไม่ Unlock ให้ใช้ max_context (ค่าจำกัด)
-            if (SillyTavern.settings.max_context) {
-                maxTokens = parseInt(SillyTavern.settings.max_context);
-            }
-        }
+        // context_size คือค่าที่ Slider เปลี่ยนแปลงจริงๆ
+        if (SillyTavern.settings.context_size) candidates.push(parseInt(SillyTavern.settings.context_size));
+        if (SillyTavern.settings.max_context) candidates.push(parseInt(SillyTavern.settings.max_context));
     }
 
-    // Failsafe: ถ้าหาไม่เจอ ให้ลองดึงจาก Context object
-    if (maxTokens <= 0 && context.max_context) maxTokens = context.max_context;
+    // 2. Check Context Object
+    if (context.max_context) candidates.push(parseInt(context.max_context));
 
-    // Ultimate Failsafe: ถ้าโหลดยังมากกว่า Max ให้ถีบ Max ขึ้น (กันหลอดแตก)
+    // 3. Check DOM Inputs (Backup)
+    const inputsToCheck = ['max_context', 'context_size', 'cfg_ctx_size'];
+    inputsToCheck.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !isNaN(parseInt(el.value))) candidates.push(parseInt(el.value));
+    });
+
+    // 4. Find the MAXIMUM value found
+    // (เพราะถ้าปลดล็อคแล้ว ค่าที่ถูกต้องมักจะเป็นค่าที่มากที่สุดเสมอ)
+    const validCandidates = candidates.filter(v => typeof v === 'number' && !isNaN(v) && v > 0);
+    if (validCandidates.length > 0) {
+        maxTokens = Math.max(...validCandidates);
+    }
+    
+    // 5. Ultimate Fallback: If unlocked but value still small
+    // ถ้าเราเห็นว่า user unlock แล้ว แต่ค่าที่หาได้ยังน้อย (เช่น 8192) ให้เดาว่า user อยากได้ unlimited
+    if (SillyTavern.settings?.unlock_context && maxTokens <= 8192) {
+        // ลองเช็คว่า stTotalTokens (โหลดจริง) เยอะกว่าไหม? ถ้าเยอะกว่า ใช้โหลดจริงเป็น Max ไปเลย
+        if (stTotalTokens > maxTokens) maxTokens = stTotalTokens;
+    }
+
     const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
-    if (finalOptimizedLoad > maxTokens) maxTokens = finalOptimizedLoad;
 
-    // --- Memory Range Label ---
+    // Memory Range Label
     let memoryRangeText = "Healthy";
     const percent = maxTokens > 0 ? (finalOptimizedLoad / maxTokens) : 0;
     
@@ -153,9 +163,6 @@ const renderInspector = () => {
         if (percent > 100) percent = 100;
     }
 
-    // Format numbers (e.g. 100,000)
-    const fmt = (n) => n.toLocaleString();
-
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
         const preview = (msg.mes || "").substring(0, 30).replace(/</g, '&lt;');
@@ -165,9 +172,12 @@ const renderInspector = () => {
                 </div>`;
     }).join('');
 
+    // Format numbers nicely
+    const fmt = (n) => n.toLocaleString();
+
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V55 (Direct)</span>
+            <span>🚀 CHRONOS V55 (Hunter)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -299,4 +309,3 @@ const createUI = () => {
         }, 2000);
     }
 })();
-
