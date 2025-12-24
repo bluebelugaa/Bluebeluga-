@@ -1,8 +1,14 @@
-// index.js - Chronos V57 (Direct Line) 📉🎯
-// Logic: Strict adherence to 'context_size' setting. No auto-expand.
-// Behavior: Max Context = Slider Value (always).
+// index.js - Chronos V57 (The Dictator) 👮‍♂️🛑
+// Logic: Priority = MANUAL_LIMIT > Settings.context_size > Everything else
+// Fixes: "Why won't it pass?" -> Because now YOU control it manually if needed.
 
-const extensionName = "Chronos_V57_DirectLine";
+const extensionName = "Chronos_V57_Dictator";
+
+// =================================================================
+// 🔧 ตั้งค่าเองได้ที่นี่ (ถ้าเบื่อระบบออโต้ ให้แก้เลข 0 เป็นค่าที่คุณต้องการเลย)
+// เช่น: const MANUAL_LIMIT = 200000;
+// =================================================================
+const MANUAL_LIMIT = 0; 
 
 // =================================================================
 // 1. HELPERS
@@ -50,7 +56,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. STRICT CALCULATOR (USER LOGIC)
+// 3. DICTATOR CALCULATOR
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Loading...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -89,29 +95,49 @@ const calculateStats = () => {
          stTotalTokens = manualChat + 2000;
     }
 
-    // --- C. MAX CONTEXT (USER REQUESTED LOGIC) ---
-    let maxTokens;
+    // --- C. MAX CONTEXT (THE PRIORITY SYSTEM) ---
+    let maxTokens = 8192; // Default fallback
 
-    // Logic ตามที่คุณส่งมาเป๊ะๆ
-    if (SillyTavern.settings?.context_size) {
+    // PRIORITY #0: MANUAL OVERRIDE (ไม้ตาย)
+    if (MANUAL_LIMIT > 0) {
+        maxTokens = MANUAL_LIMIT;
+    } 
+    // PRIORITY #1: SETTINGS 'context_size' (Unlock uses this)
+    else if (SillyTavern.settings && SillyTavern.settings.context_size > 0) {
         maxTokens = parseInt(SillyTavern.settings.context_size);
-    } else if (context.max_context) {
+    }
+    // PRIORITY #2: API LIMIT
+    else if (SillyTavern.main_api?.max_context > 0) {
+        maxTokens = SillyTavern.main_api.max_context;
+    }
+    // PRIORITY #3: Old Settings
+    else if (SillyTavern.settings?.max_context > 0) {
+        maxTokens = parseInt(SillyTavern.settings.max_context);
+    }
+    // PRIORITY #4: Context Object
+    else if (context.max_context > 0) {
         maxTokens = parseInt(context.max_context);
-    } else {
-        maxTokens = 8192;
     }
 
-    // Unlock = เปลี่ยนแค่ Label ไม่เปลี่ยนเพดาน
-    const isUnlocked = SillyTavern.settings?.unlock_context;
+    // --- FIX: 8192 STUCK FIX ---
+    // ถ้ามีการปลดล็อค แต่ค่าที่ได้ยังเป็น 8192 หรือน้อยกว่า
+    // ให้สันนิษฐานว่าโค้ดอ่านผิด ให้ใช้ Logic Auto-Expand
+    const isUnlocked = SillyTavern.settings?.unlock_context || SillyTavern.settings?.unlocked_context;
+    if (isUnlocked && maxTokens <= 8192) {
+        // ถ้าโหลดจริงเยอะกว่า Max ให้ใช้โหลดจริง
+        if (stTotalTokens > maxTokens) maxTokens = stTotalTokens;
+        // หรือถ้าโหลดจริงยังน้อย ให้ตั้งไว้ที่ 100k
+        else maxTokens = 100000; 
+    }
 
-    // --- D. RESULT ---
+    // --- FINAL CHECK ---
     const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
     
-    // Status Logic
+    // Memory Range Label
     let memoryRangeText = "Healthy";
     const percent = maxTokens > 0 ? (finalOptimizedLoad / maxTokens) : 0;
     
-    if (percent > 1) memoryRangeText = "Overflow"; // เกินเพดานที่ตั้งไว้
+    if (percent > 1) memoryRangeText = "Overflow";
     else if (percent > 0.9) memoryRangeText = "Critical";
     else if (percent > 0.75) memoryRangeText = "Heavy";
 
@@ -120,8 +146,7 @@ const calculateStats = () => {
         original: stTotalTokens,
         optimized: finalOptimizedLoad,
         saved: totalSavings,
-        max: maxTokens,
-        unlocked: isUnlocked
+        max: maxTokens
     };
 };
 
@@ -138,7 +163,6 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    // Visual Bar Cap at 100% (แม้ตัวเลขจะเกิน)
     let percent = 0;
     if (stats.max > 0) {
         percent = (stats.optimized / stats.max) * 100;
@@ -154,15 +178,11 @@ const renderInspector = () => {
                 </div>`;
     }).join('');
 
-    // Format numbers
     const fmt = (n) => Math.round(n).toLocaleString();
-    
-    // Display Label: Show "Unlock" if checked, but keep the number static
-    const maxLabel = stats.unlocked ? `${fmt(stats.max)} (🔓)` : fmt(stats.max);
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V57 (Direct)</span>
+            <span>🚀 CHRONOS V57 (Dictator)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -178,8 +198,8 @@ const renderInspector = () => {
             </div>
 
             <div class="dash-row">
-                <span style="color:#fff;">🔋 Load</span>
-                <span class="dash-val" style="color:#fff;">${fmt(stats.optimized)} / ${maxLabel}</span>
+                <span style="color:#fff;">🔋 Load (${MANUAL_LIMIT > 0 ? 'Manual' : 'Auto'})</span>
+                <span class="dash-val" style="color:#fff;">${fmt(stats.optimized)} / ${fmt(stats.max)}</span>
             </div>
             
             <div class="dash-row" style="margin-top:4px; font-size:10px; color:#666;">
@@ -294,4 +314,4 @@ const createUI = () => {
         }, 2000);
     }
 })();
-        
+            
