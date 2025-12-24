@@ -1,13 +1,13 @@
-// index.js - Chronos V60 (Perfect Fusion) 💎⚡
-// Logic: V59 Smart Sync (Reads real ST load) + Manual Max Input
-// UI: V47 Neon Style (As requested) + Scroll Fix
+// index.js - Chronos V60 (Final Fusion) 💎🌌
+// UI: Neon V47 (Strictly Preserved)
+// Logic: V59 Smart Counter + Manual Input Field
 
-const extensionName = "Chronos_V60_Fusion";
+const extensionName = "Chronos_V60_FinalFusion";
 
 // =================================================================
 // 1. GLOBAL STATE
 // =================================================================
-let userManualLimit = 0; // เก็บค่าที่คุณกรอกเอง
+let userManualLimit = 0; // ค่าที่คุณกรอกเอง
 
 const getChronosTokenizer = () => {
     try {
@@ -30,7 +30,7 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. HOOKS
+// 2. HOOKS (Smart Logic)
 // =================================================================
 const optimizePayload = (data) => {
     const processText = (text) => {
@@ -52,7 +52,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (V59 Logic: Accurate Load + Manual Max)
+// 3. CALCULATOR (V59 Logic)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -74,7 +74,7 @@ const calculateStats = () => {
         }
     });
 
-    // --- B. BASE LOAD (Logic "อันหน้า" ที่แม่นยำจาก V59) ---
+    // --- B. BASE LOAD (Logic "ตัวหน้า" ที่แม่นยำจาก V59) ---
     let stTotalTokens = context.tokens || 0;
     
     // Fallback: Read DOM if ST returns 0
@@ -89,7 +89,7 @@ const calculateStats = () => {
             }
         }
     }
-    // Final Fallback
+    // Final Fallback: Manual Count
     if (stTotalTokens === 0 && chat.length > 0) {
          let manualChat = 0;
          chat.forEach(m => manualChat += quickCount(m.mes));
@@ -100,9 +100,9 @@ const calculateStats = () => {
     let maxTokens = 8192;
 
     if (userManualLimit > 0) {
-        maxTokens = userManualLimit; // ใช้ค่าที่คุณกรอกเอง
+        maxTokens = userManualLimit;
     } else {
-        // Auto logic (V58/59)
+        // Auto logic as backup
         const isUnlocked = SillyTavern.settings?.unlock_context || SillyTavern.settings?.unlocked_context;
         if (isUnlocked) {
             if (SillyTavern.settings?.context_size > 8192) maxTokens = parseInt(SillyTavern.settings.context_size);
@@ -116,12 +116,10 @@ const calculateStats = () => {
 
     const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
 
-    // Memory Label
     let memoryRangeText = "Healthy";
     const percent = maxTokens > 0 ? (finalOptimizedLoad / maxTokens) : 0;
     if (percent > 1) memoryRangeText = "Overflow";
     else if (percent > 0.9) memoryRangeText = "Critical";
-    else if (percent > 0.75) memoryRangeText = "Heavy";
 
     return {
         memoryRange: memoryRangeText,
@@ -134,7 +132,7 @@ const calculateStats = () => {
 };
 
 // =================================================================
-// 4. UI RENDERER (V47 Style + Input Field)
+// 4. UI RENDERER (V47 Structure + Input Field)
 // =================================================================
 window.updateManualLimit = (val) => {
     userManualLimit = parseInt(val);
@@ -145,22 +143,18 @@ const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
-    // Scroll Fix (จาก V47)
+    // Scroll Lock Logic (From V47)
     const msgListEl = ins.querySelector('.msg-list');
     const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
 
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    let percent = 0;
-    if (stats.max > 0) {
-        percent = (stats.optimized / stats.max) * 100;
-        if (percent > 100) percent = 100;
-    }
-
+    const percent = stats.max > 0 ? Math.min((stats.optimized / stats.max) * 100, 100) : 0;
+    
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
-        const preview = (msg.mes || "").substring(0, 25).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const preview = (msg.mes || "").substring(0, 25).replace(/</g, '&lt;');
         const roleIcon = msg.is_user ? '👤' : '🤖';
         return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">
                     <span style="color:#D500F9;">#${actualIdx}</span> ${roleIcon} ${preview}...
@@ -171,10 +165,10 @@ const renderInspector = () => {
     const inputValue = userManualLimit > 0 ? userManualLimit : '';
     const placeholder = stats.source === 'Auto' ? fmt(stats.max) : 'Auto';
 
-    // UI Layout (V47 Style)
+    // HTML Structure based on V47 + Input Field
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V60 (Fusion)</span>
+            <span>🚀 CHRONOS V60 (Polished)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -190,7 +184,7 @@ const renderInspector = () => {
             </div>
             
             <div class="dash-row">
-                <span style="color:#aaa;">🛡️ Tokens Saved (Est.)</span>
+                <span style="color:#aaa;">🛡️ Tokens Saved</span>
                 <span class="dash-val" style="color:#00E676;">-${fmt(stats.saved)} toks</span>
             </div>
 
@@ -211,7 +205,7 @@ const renderInspector = () => {
             </div>
             
             <div style="text-align:right; font-size:9px; color:#555; margin-top:3px;">
-                Original ST: ${fmt(stats.original)}
+                Src: ${stats.source}
             </div>
         </div>
 
@@ -223,25 +217,25 @@ const renderInspector = () => {
             
             <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase;">Recent Messages</div>
             <div class="msg-list">${listHtml}</div>
-            <div id="view-target-wrapper"><div id="view-target-content"></div></div>
+            
+            <div id="view-target-wrapper">
+                <div id="view-target-content"></div>
+            </div>
         </div>
     `;
 
-    // Restore Scroll (จาก V47)
-    const newMsgListEl = ins.querySelector('.msg-list');
-    if (newMsgListEl) {
-        newMsgListEl.scrollTop = prevScrollTop;
-    }
+    if (newMsgListEl) newMsgListEl.scrollTop = prevScrollTop;
 };
 
 // =================================================================
-// 5. STYLES (V47 Style Exactly)
+// 5. STYLES (Strictly V47 Style)
 // =================================================================
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
 const injectStyles = () => {
     const style = document.createElement('style');
     style.innerHTML = `
+        /* ORB STYLES */
         #chronos-orb {
             position: fixed; top: 150px; right: 20px; width: 40px; height: 40px;
             background: radial-gradient(circle, rgba(20,0,30,0.9) 0%, rgba(0,0,0,1) 100%);
@@ -256,6 +250,7 @@ const injectStyles = () => {
         #chronos-orb:hover { transform: scale(1.1); border-color: #00E676; color: #00E676; box-shadow: 0 0 25px #00E676; }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+        /* INSPECTOR PANEL */
         #chronos-inspector {
             position: fixed; top: 80px; right: 70px; width: 320px; 
             background: rgba(10, 10, 12, 0.95); 
@@ -345,8 +340,7 @@ window.searchById = () => {
 };
 
 window.viewAIVersion = (index) => {
-    const context = SillyTavern.getContext(); 
-    const chat = context.chat || [];
+    const chat = SillyTavern.getContext().chat || [];
     const msg = chat[index];
     if (!msg) return;
 
@@ -384,14 +378,14 @@ window.viewAIVersion = (index) => {
 };
 
 // =================================================================
-// 7. INITIALIZATION
+// 6. INITIALIZATION
 // =================================================================
 (function() {
     injectStyles();
     setTimeout(createUI, 2000); 
 
     if (typeof SillyTavern !== 'undefined') {
-        console.log(`[${extensionName}] Ready. Fusion Complete.`);
+        console.log(`[${extensionName}] Ready. Live Monitoring + Manual Input.`);
         
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
@@ -403,9 +397,6 @@ window.viewAIVersion = (index) => {
                 renderInspector();
             }
         }, 2000);
-
-    } else {
-        console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
-                
+    
