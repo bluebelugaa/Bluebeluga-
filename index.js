@@ -1,15 +1,27 @@
-// index.js - Chronos V32 (Native Linker) 🔗💎
+// index.js - Chronos V33 (The Mirror Protocol) 🪞✨
 
-const extensionName = "Chronos_V32_Native";
+const extensionName = "Chronos_V33_Mirror";
 
-// ค่าเริ่มต้น (ไม่ต้องมีตัวหารแล้ว มีแค่ Base Offset เผื่อไว้)
-let config = {
-    baseOffset: 0 // เดี๋ยวเราจะลองคำนวณ Base อัตโนมัติด้วย
+// =================================================================
+// 1. Logic: Tokenizer Wrapper (เรียกใช้ของระบบ)
+// =================================================================
+const getSysTokenCount = (text) => {
+    if (!text) return 0;
+    try {
+        // พยายามเรียก Tokenizer ตัวเดียวกับที่หน้าจอ SillyTavern ใช้
+        if (typeof SillyTavern !== 'undefined' && SillyTavern.Tokenizers && typeof SillyTavern.Tokenizers.encode === 'function') {
+            return SillyTavern.Tokenizers.encode(text).length;
+        }
+        // Fallback (เผื่อหาไม่เจอ)
+        if (typeof GPTTokenizer_Encoding_Encode === 'function') {
+            return GPTTokenizer_Encoding_Encode(text).length;
+        }
+        return Math.round(text.length / 3); // กันตาย
+    } catch (e) {
+        return 0;
+    }
 };
 
-// =================================================================
-// 1. Logic: Stripper (ล้างโค้ดเหมือนเดิม)
-// =================================================================
 const stripHtmlToText = (html) => {
     let text = html.replace(/<br\s*\/?>/gi, '\n')
                    .replace(/<\/p>/gi, '\n\n')
@@ -22,112 +34,71 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. Logic: Native Tokenizer (พระเอกของงาน)
+// 2. Logic: The Mirror Calculator (สูตรใหม่)
 // =================================================================
-const getNativeTokenCount = (text) => {
-    if (!text) return 0;
-    
-    try {
-        // วิธีที่ 1: เรียกผ่าน Module ของ SillyTavern โดยตรง (แม่นยำที่สุด)
-        if (typeof SillyTavern !== 'undefined' && SillyTavern.Tokenizers && typeof SillyTavern.Tokenizers.encode === 'function') {
-            const tokens = SillyTavern.Tokenizers.encode(text);
-            return tokens.length;
-        }
-        
-        // วิธีที่ 2: ถ้าหาไม่เจอ ลองเรียกผ่าน Global Encoder (บางเวอร์ชันใช้ตัวนี้)
-        if (typeof GPTTokenizer_Encoding_Encode === 'function') {
-            return GPTTokenizer_Encoding_Encode(text).length;
-        }
-
-        // วิธีที่ 3: กันตาย (ถ้าหาไม่เจอจริงๆ ค่อยใช้สูตรหาร)
-        console.warn("[Chronos] Native tokenizer not found, falling back to estimation.");
-        return Math.round(text.length / 2.5);
-        
-    } catch (e) {
-        console.error("[Chronos] Tokenizer Error:", e);
-        return 0;
-    }
-};
-
-// =================================================================
-// 3. Logic: Context Calculator
-// =================================================================
-const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { chatRaw: 0, chatReal: 0, totalRaw: 0, totalReal: 0 };
+const calculateMirrorStats = () => {
+    if (typeof SillyTavern === 'undefined') return { raw: 0, real: 0, saved: 0, max: 0 };
     
     const context = SillyTavern.getContext();
+    
+    // 1. ดึงค่า Raw จาก SillyTavern โดยตรง (เลขนี้ต้องตรงกับหน้าจอ 100%)
+    // SillyTavern เก็บค่า token ปัจจุบันไว้ใน context.tokens หรือ context.token_count
+    let systemRawTokens = context.tokens || 0; 
+    
+    // เผื่อบางเวอร์ชันใช้ชื่ออื่น
+    if (systemRawTokens === 0 && document.getElementById('token_count_bar')) {
+        // ดึงจากหน้าจอ UI โดยตรงเลยถ้าหาตัวแปรไม่เจอ
+        const text = document.getElementById('token_count_bar').innerText;
+        const match = text.match(/(\d+)/);
+        if (match) systemRawTokens = parseInt(match[1]);
+    }
+
+    // 2. คำนวณส่วนต่าง (Savings)
+    // เราจะวนลูปดูว่า ใน Chat History มี HTML ให้ตัดเท่าไหร่
     const chat = context.chat || [];
-    const maxTokens = context.max_context || 8192;
-    
-    // --- 1. คำนวณ Base (System + Card) แบบ Native ---
-    let baseTokens = 0;
-    
-    // ลองคำนวณ Base จากข้อมูลจริง
-    if (context.characterId && SillyTavern.characters && SillyTavern.characters[context.characterId]) {
-        const char = SillyTavern.characters[context.characterId];
-        // รวมทุกอย่างที่เป็นโครงสร้างหลัก
-        const charText = (char.description || "") + "\n" + 
-                         (char.personality || "") + "\n" + 
-                         (char.scenario || "") + "\n" + 
-                         (char.first_mes || "");
-        
-        // บวก System Prompt (ประมาณการ หรือดึงถ้าทำได้)
-        // System Prompt มักจะซ่อนอยู่ลึก เราจะบวกค่าเฉลี่ยมาตรฐาน หรือใช้ค่า Offset ที่ user ตั้งเผื่อไว้
-        baseTokens = getNativeTokenCount(charText) + config.baseOffset;
-    } else {
-        baseTokens = config.baseOffset;
-    }
+    let totalSavedTokens = 0;
+    let latestMsgSaved = 0;
 
-    // --- 2. คำนวณ Chat History ---
-    let chatRaw = 0;
-    let chatReal = 0;
-    let rememberedCount = 0;
-    
-    // เริ่มต้นนับที่ Base
-    let currentRawTotal = baseTokens;
-    let currentRealTotal = baseTokens;
-
-    for (let i = chat.length - 1; i >= 0; i--) {
-        const msg = chat[i];
+    chat.forEach((msg, index) => {
+        const originalContent = msg.mes;
         
-        // Raw (แบบ Silly) - ใช้ Native Count
-        const rawTok = getNativeTokenCount(msg.mes) + 5; // +5 เผื่อ Metadata
-        
-        // Real (แบบตัดแล้ว) - ใช้ Native Count
-        let content = msg.mes;
-        if (content.includes('<') && content.includes('>')) {
-            const clean = stripHtmlToText(content);
-            content = `[System Content:\n${clean}]`;
-        }
-        const realTok = getNativeTokenCount(content) + 5;
-
-        // เช็คโควต้า (ใช้ยอด Real เป็นตัวตัดสิน)
-        if (currentRealTotal + realTok < maxTokens) {
-            chatRaw += rawTok;
-            chatReal += realTok;
+        // ถ้ามี HTML
+        if (originalContent.includes('<') && originalContent.includes('>')) {
+            // 1. นับแบบมี HTML (Raw)
+            const rawCount = getSysTokenCount(originalContent);
             
-            currentRawTotal += rawTok;
-            currentRealTotal += realTok;
-            rememberedCount++;
-        } else {
-            // หยุดนับเมื่อเต็ม
-            break;
+            // 2. นับแบบตัดแล้ว (Clean)
+            const cleanText = stripHtmlToText(originalContent);
+            const finalContent = `[System Content:\n${cleanText}]`; // Format ที่เราจะส่ง
+            const cleanCount = getSysTokenCount(finalContent);
+            
+            // 3. หาผลต่าง
+            const diff = rawCount - cleanCount;
+            
+            if (diff > 0) {
+                totalSavedTokens += diff;
+                // เช็คว่าเป็นข้อความล่าสุดไหม
+                if (index === chat.length - 1) {
+                    latestMsgSaved = diff;
+                }
+            }
         }
-    }
+    });
+
+    // 3. สรุปยอด
+    const realTokens = systemRawTokens - totalSavedTokens;
 
     return {
-        base: baseTokens,
-        chatRaw: chatRaw,
-        chatReal: chatReal,
-        totalRaw: currentRawTotal,
-        totalReal: currentRealTotal,
-        max: maxTokens,
-        count: rememberedCount
+        raw: systemRawTokens,     // ยอดดิบ (จากระบบ)
+        real: realTokens,         // ยอดจริง (หลังหักลบ)
+        saved: totalSavedTokens,  // ประหยัดไปได้
+        latest: latestMsgSaved,   // ล่าสุด
+        max: context.max_context || 8192
     };
 };
 
 // =================================================================
-// UI (ยังคงฟีเจอร์เดิมครบถ้วน)
+// UI
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
@@ -152,14 +123,10 @@ const injectStyles = () => {
         .ins-header { background: linear-gradient(90deg, #330044, #5c007a); color: #fff; padding: 8px 10px; font-weight: bold; border-bottom: 1px solid #D500F9; display: flex; justify-content: space-between; }
         .control-zone { display: flex; gap: 10px; padding: 5px 10px; background: #220033; border-bottom: 1px solid #550077; font-size: 10px; color: #00E676; }
         
-        .calib-zone { background: #111; padding: 10px; border-bottom: 1px solid #333; }
-        .calib-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
-        .calib-input { background: #000; border: 1px solid #555; color: #fff; width: 60px; text-align: center; }
-        
         .dashboard-zone { background: #000; padding: 10px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
         .sub-row { display: flex; justify-content: space-between; margin-bottom: 2px; padding-left: 10px; color: #777; font-size: 10px; }
-
+        
         .ins-body { padding: 10px; }
         .search-row { display: flex; gap: 5px; margin-bottom: 10px; }
         .search-input { background: #222; border: 1px solid #D500F9; color: #fff; padding: 3px; width: 50px; border-radius: 3px; }
@@ -193,7 +160,7 @@ const createUI = () => {
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     const chat = SillyTavern.getContext().chat || [];
-    const stats = calculateStats();
+    const stats = calculateMirrorStats();
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -203,7 +170,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🔗 NATIVE LINKER V32</span>
+            <span>🪞 MIRROR PROTOCOL V33</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -212,37 +179,28 @@ const renderInspector = () => {
             <label style="display:flex;gap:5px;cursor:pointer;"><input type="checkbox" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}>🔓Win</label>
         </div>
 
-        <div class="calib-zone">
-            <div style="font-size:10px; color:#aaa; margin-bottom:5px;">
-                ระบบกำลังใช้ <b>Native Tokenizer</b> ของ SillyTavern คำนวณ
-            </div>
-            <div class="calib-row">
-                <span>Extra Offset:</span>
-                <input type="number" value="${config.baseOffset}" class="calib-input" onchange="updateOffset(this.value)">
-            </div>
-            <div style="font-size:9px; color:#555;">(ใส่เลขเพิ่ม ถ้า Base ยังไม่ตรงเป๊ะ)</div>
-            <button onclick="renderInspector()" style="width:100%; margin-top:5px; background:#333; color:#fff; border:none; cursor:pointer;">🔄 REFRESH</button>
-        </div>
-
         <div class="dashboard-zone">
-            <div class="dash-row">
-                <span style="color:#FF9800;">🟠 Total Raw:</span>
-                <b style="color:#FF9800;">${stats.totalRaw}</b>
+            <div class="dash-row" style="border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:5px;">
+                <span style="color:#FF9800;">🟠 Raw (System):</span>
+                <b style="color:#FF9800;">${stats.raw} Tok</b>
             </div>
+            
             <div class="sub-row">
-                <span>(Base: ${stats.base} | Chat: ${stats.chatRaw})</span>
+                <span>🛡️ Total Saved:</span>
+                <span style="color:#E040FB;">-${stats.saved}</span>
             </div>
-
-            <div class="dash-row" style="border-top:1px solid #333; margin-top:5px; padding-top:5px;">
-                <span style="color:#00E676;">🟢 Total Real:</span>
-                <b style="color:#00E676;">${stats.totalReal} / ${stats.max}</b>
+            
+            <div class="dash-row" style="margin-top:10px; border-top:1px solid #555; padding-top:5px;">
+                <span style="color:#00E676;">🟢 Real (To Send):</span>
+                <b style="color:#00E676;">${stats.real} / ${stats.max}</b>
             </div>
-            <div class="sub-row">
-                <span style="color:#00E676;">(Chat Real: ${stats.chatReal})</span>
+            <div style="font-size:9px; color:#555; text-align:right;">
+                (Mirror Mode: 100% Sync with UI)
             </div>
         </div>
 
         <div class="ins-body">
+            <button onclick="renderInspector()" style="width:100%; margin-bottom:10px; background:#333; color:#fff; border:none; padding:5px; cursor:pointer;">🔄 Refresh Stats</button>
             <div class="search-row">
                 <span>ID:</span> <input type="number" id="chronos-search-id" class="search-input">
                 <button class="search-btn" onclick="searchById()">Check</button>
@@ -251,10 +209,6 @@ const renderInspector = () => {
             <div id="view-target"></div>
         </div>
     `;
-};
-
-window.updateOffset = (value) => {
-    config.baseOffset = parseInt(value) || 0;
 };
 
 window.toggleDrag = (type, isChecked) => {
@@ -301,10 +255,10 @@ window.searchById = () => {
 window.viewAIVersion = (index) => {
     const chat = SillyTavern.getContext().chat;
     const msg = chat[index].mes;
-    const rawTokens = getNativeTokenCount(msg.mes);
+    const rawTokens = getSysTokenCount(msg.mes); // ใช้ System Tokenizer
     const cleanText = stripHtmlToText(msg.mes);
     const aiViewText = `[System Content:\n${cleanText}]`;
-    const cleanTokens = getNativeTokenCount(aiViewText);
+    const cleanTokens = getSysTokenCount(aiViewText); // ใช้ System Tokenizer
     const saved = rawTokens - cleanTokens;
 
     document.getElementById('view-target').innerHTML = `
@@ -333,5 +287,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-}
-    
+    }
+
