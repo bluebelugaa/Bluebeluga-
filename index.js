@@ -1,10 +1,10 @@
-// index.js - Chronos V65 (Clean Focus) 🧹🎯
-// Logic: Load = Total Raw (Uncut)
-//        Chat = Chat History (Stripped/Clean only)
-//        Saved = REMOVED (As requested)
-// Feature: Manual Input + V47 Neon Style
+// index.js - Chronos V66 (Total Itemization) 🌌📊
+// UI: Neon V47 (Strictly Preserved)
+// Logic: Load = Total RAW System Tokens (All categories: World Info, Persona, Chat, etc.)
+//        Chat = Chat History (Clean/Stripped only)
+// Feature: Manual Limit Input Field in UI
 
-const extensionName = "Chronos_V65_CleanFocus";
+const extensionName = "Chronos_V66_TotalRecall";
 
 // =================================================================
 // 1. GLOBAL STATE
@@ -55,7 +55,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Total Raw vs Chat Clean)
+// 3. CALCULATOR (Total Itemization Mode)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", displayLoad: 0, max: 0, chatClean: 0 };
@@ -67,42 +67,32 @@ const calculateStats = () => {
 
     // --- A. ANALYZE CHAT (CLEAN ONLY) ---
     let chatCleanTokens = 0; 
-
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
         let tokens = 0;
-
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
-            // ถ้ามี HTML ให้ตัดออกแล้วค่อยนับ
             const cleanMsg = `[System Content:\n${stripHtmlToText(rawMsg)}]`;
             tokens = quickCount(cleanMsg);
         } else {
-            // ถ้าไม่มีก็นับเลย
             tokens = quickCount(rawMsg);
         }
-        
         chatCleanTokens += tokens;
     });
 
-    // --- B. TOTAL SYSTEM LOAD (RAW from ST) ---
-    // ยอดรวมทุกอย่าง (Description + World Info + Chat Raw)
-    let stTotalTokens = context.tokens || 0;
+    // --- B. TOTAL SYSTEM LOAD (Raw Total from all sources) ---
+    // อิงยอดรวมจาก ST context.tokens ซึ่งรวมทุกหมวดหมู่ (World Info, Persona, Chat Raw) ตามหน้า Itemization
+    let totalRawUsage = context.tokens || 0;
     
-    // Fallback: Read DOM
-    if (stTotalTokens === 0) {
+    // Fallback: ดึงจาก UI บาร์บนถ้าค่าใน context เป็น 0
+    if (totalRawUsage === 0) {
         const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
         if (tokenCounterEl) {
-            const text = tokenCounterEl.innerText || "";
-            const parts = text.split('/');
+            const parts = (tokenCounterEl.innerText || "").split('/');
             if (parts.length > 0) {
                 const domCurrent = parseInt(parts[0].replace(/[^0-9]/g, ''));
-                if (!isNaN(domCurrent) && domCurrent > 0) stTotalTokens = domCurrent;
+                if (!isNaN(domCurrent) && domCurrent > 0) totalRawUsage = domCurrent;
             }
         }
-    }
-    // Fallback Manual (Last resort)
-    if (stTotalTokens === 0 && chat.length > 0) {
-         stTotalTokens = chatCleanTokens + 2000; 
     }
 
     // --- C. MAX CONTEXT ---
@@ -118,28 +108,24 @@ const calculateStats = () => {
             if (SillyTavern.settings?.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
             else if (context.max_context) maxTokens = parseInt(context.max_context);
         }
-        // Force Expand
-        if (stTotalTokens > maxTokens) maxTokens = stTotalTokens;
+        if (totalRawUsage > maxTokens) maxTokens = totalRawUsage;
     }
 
-    // Load = Raw Total
-    const displayLoad = stTotalTokens; 
-
-    let memoryRangeText = "Healthy";
-    const percent = maxTokens > 0 ? (displayLoad / maxTokens) : 0;
-    if (percent > 1) memoryRangeText = "Overflow";
-    else if (percent > 0.9) memoryRangeText = "Critical";
+    let statusLabel = "Healthy";
+    const percent = maxTokens > 0 ? (totalRawUsage / maxTokens) : 0;
+    if (percent > 1) statusLabel = "Overflow";
+    else if (percent > 0.9) statusLabel = "Near Limit";
 
     return {
-        memoryRange: memoryRangeText,
-        displayLoad: displayLoad, // ยอดดิบรวม
+        memoryRange: statusLabel,
+        displayLoad: totalRawUsage, // โชว์ยอดรวมดิบทั้งหมด
         max: maxTokens,
-        chatClean: chatCleanTokens // ยอดแชทคลีน
+        chatClean: chatCleanTokens // โชว์ยอดแชทที่คลีนแล้ว
     };
 };
 
 // =================================================================
-// 4. UI RENDERER
+// 4. UI RENDERER (V47 Design + Manual Input)
 // =================================================================
 window.updateManualLimit = (val) => {
     userManualLimit = parseInt(val);
@@ -155,7 +141,6 @@ const renderInspector = () => {
 
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
-    
     const percent = stats.max > 0 ? Math.min((stats.displayLoad / stats.max) * 100, 100) : 0;
     
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
@@ -171,10 +156,9 @@ const renderInspector = () => {
     const inputValue = userManualLimit > 0 ? userManualLimit : '';
     const placeholder = fmt(stats.max);
 
-    // Removed "Saved" Row as requested
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V65 (Clean Focus)</span>
+            <span>🚀 CHRONOS V66 (Itemized)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -185,12 +169,12 @@ const renderInspector = () => {
 
         <div class="dashboard-zone">
             <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
-                <span style="color:#aaa;">🧠 Status</span>
+                <span style="color:#aaa;">🧠 Memory Status</span>
                 <span class="dash-val" style="color:#E040FB;">${stats.memoryRange}</span>
             </div>
-            
-            <div class="dash-row" style="align-items:center; margin-top:5px;">
-                <span style="color:#fff;">🔋 Load (Total Raw)</span>
+
+            <div class="dash-row" style="align-items:center;">
+                <span style="color:#fff;">🔋 Load (Total Recall)</span>
                 <div style="display:flex; align-items:center; gap:5px;">
                     <span class="dash-val" style="color:#fff;">${fmt(stats.displayLoad)} / </span>
                     <input type="number" 
@@ -229,7 +213,7 @@ const renderInspector = () => {
 };
 
 // =================================================================
-// 5. STYLES (Strict V47 Neon)
+// 5. STYLES (Neon V47 - Strictly Preserved)
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
@@ -244,6 +228,7 @@ const injectStyles = () => {
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6), inset 0 0 10px rgba(213, 0, 249, 0.3);
             user-select: none; 
             animation: spin-slow 4s linear infinite;
+            transition: transform 0.2s;
         }
         #chronos-orb:hover { transform: scale(1.1); border-color: #00E676; color: #00E676; box-shadow: 0 0 25px #00E676; }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -290,7 +275,7 @@ const injectStyles = () => {
 };
 
 // =================================================================
-// 6. DRAG UTILS
+// 6. UTILS
 // =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
@@ -307,11 +292,9 @@ const makeDraggable = (elm, type) => {
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        
         const clientX = e.clientX || e.touches[0].clientX; 
         const clientY = e.clientY || e.touches[0].clientY;
         pos3 = clientX; pos4 = clientY;
-        
         document.onmouseup = dragEnd; document.onmousemove = dragAction;
         document.ontouchend = dragEnd; document.ontouchmove = dragAction;
         elm.setAttribute('data-dragging', 'true');
@@ -346,38 +329,18 @@ window.viewAIVersion = (index) => {
     const chat = context.chat || [];
     const msg = chat[index];
     if (!msg) return;
-
     const wrapper = document.getElementById('view-target-wrapper');
     if (wrapper) wrapper.style.display = 'block';
-
     const contentDiv = document.getElementById('view-target-content');
     if (!contentDiv) return;
-
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 2.7);
-
-    const rawTokens = quickCount(msg.mes);
     let cleanText = stripHtmlToText(msg.mes);
     let aiViewText = msg.mes; 
-    
     if (/<[^>]+>|&lt;[^&]+&gt;/.test(msg.mes)) {
         aiViewText = `[System Content:\n${cleanText}]`;
     }
-
-    const cleanTokens = quickCount(aiViewText);
-    const saved = Math.max(0, rawTokens - cleanTokens);
-
-    contentDiv.innerHTML = `
-        <div style="margin-bottom:3px; color:#D500F9; font-weight:bold; font-size:10px;">
-            TARGET ID: #${index} (${msg.is_user ? 'USER' : 'AI'})
-        </div>
-        <div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>
-        <div class="stat-badge">
-            <span style="color:#aaa;">Raw: ${rawTokens}</span>
-            <span style="color:#00E676;">Sent: ${cleanTokens}</span>
-            <span style="color:#E040FB;">Saved: -${saved}</span>
-        </div>
-    `;
+    contentDiv.innerHTML = `<div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>`;
 };
 
 // =================================================================
@@ -386,40 +349,27 @@ window.viewAIVersion = (index) => {
 const createUI = () => {
     const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
-
     const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
     const ins = document.createElement('div'); ins.id = 'chronos-inspector';
-    
-    document.body.appendChild(orb); 
-    document.body.appendChild(ins);
-    
+    document.body.appendChild(orb); document.body.appendChild(ins);
     orb.onclick = (e) => {
         if (orb.getAttribute('data-dragging') === 'true') return;
         ins.style.display = (ins.style.display === 'none') ? 'block' : 'none';
         if (ins.style.display === 'block') renderInspector();
     };
-
     makeDraggable(orb, 'orb'); makeDraggable(ins, 'panel');
 };
 
 (function() {
     injectStyles();
     setTimeout(createUI, 2000); 
-
     if (typeof SillyTavern !== 'undefined') {
-        console.log(`[${extensionName}] Ready. Clean Focus Mode.`);
-        
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-
         setInterval(() => {
             const ins = document.getElementById('chronos-inspector');
-            if (ins && ins.style.display === 'block') {
-                renderInspector();
-            }
+            if (ins && ins.style.display === 'block') renderInspector();
         }, 2000);
-    } else {
-        console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
-    
+
