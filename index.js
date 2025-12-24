@@ -1,12 +1,12 @@
-// index.js - Chronos V61 (Absolute Fix) 🛠️💎
-// Fixes: "Orb not showing" by using safe DOM methods & Max Z-Index
-// UI: Neon V47 Style (Preserved)
-// Feature: Manual Limit Input Field
+// index.js - Chronos V62 (Total Recall) 🌌🧠
+// Logic: Load = Total System Tokens (Optimized)
+// UI: Src Label now shows "Chat Only" count
+// Feature: Manual Input + V47 Neon Style
 
-const extensionName = "Chronos_V61_Absolute";
+const extensionName = "Chronos_V62_TotalRecall";
 
 // =================================================================
-// 1. GLOBAL STATE (Moved to top for safety)
+// 1. GLOBAL STATE
 // =================================================================
 let userManualLimit = 0; 
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
@@ -54,29 +54,33 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR
+// 3. CALCULATOR (Updated for Chat Separation)
 // =================================================================
 const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, saved: 0, max: 0 };
+    if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, saved: 0, max: 0, chatOnly: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 3);
 
-    // --- A. SAVINGS ---
+    // --- A. ANALYZE CHAT & SAVINGS ---
     let totalSavings = 0;
+    let chatRawTokens = 0; // [NEW] นับเฉพาะแชท
+
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
+        const rawLen = quickCount(rawMsg);
+        chatRawTokens += rawLen; // สะสมยอดแชทดิบ
+
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
-            const rawLen = quickCount(rawMsg);
             const cleanMsg = `[System Content:\n${stripHtmlToText(rawMsg)}]`;
             const optLen = quickCount(cleanMsg);
             totalSavings += Math.max(0, rawLen - optLen);
         }
     });
 
-    // --- B. BASE LOAD (DOM Sync) ---
+    // --- B. TOTAL SYSTEM LOAD (From ST) ---
     let stTotalTokens = context.tokens || 0;
     
     // Fallback: Read DOM
@@ -91,11 +95,9 @@ const calculateStats = () => {
             }
         }
     }
-    // Final Fallback
+    // Fallback Manual
     if (stTotalTokens === 0 && chat.length > 0) {
-         let manualChat = 0;
-         chat.forEach(m => manualChat += quickCount(m.mes));
-         stTotalTokens = manualChat + 2000;
+         stTotalTokens = chatRawTokens + 2000; // Est overhead
     }
 
     // --- C. MAX CONTEXT ---
@@ -115,6 +117,7 @@ const calculateStats = () => {
         if (stTotalTokens > maxTokens) maxTokens = stTotalTokens;
     }
 
+    // Load จริง (รวมทุกอย่าง - ที่ประหยัดได้)
     const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
 
     let memoryRangeText = "Healthy";
@@ -128,7 +131,7 @@ const calculateStats = () => {
         optimized: finalOptimizedLoad,
         saved: totalSavings,
         max: maxTokens,
-        source: userManualLimit > 0 ? "Manual" : "Auto"
+        chatOnly: chatRawTokens // ส่งค่าเฉพาะแชทออกไป
     };
 };
 
@@ -163,11 +166,11 @@ const renderInspector = () => {
 
     const fmt = (n) => n.toLocaleString();
     const inputValue = userManualLimit > 0 ? userManualLimit : '';
-    const placeholder = stats.source === 'Auto' ? fmt(stats.max) : 'Auto';
+    const placeholder = fmt(stats.max);
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V61 (Input)</span>
+            <span>🚀 CHRONOS V62 (Recall)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -188,7 +191,7 @@ const renderInspector = () => {
             </div>
 
             <div class="dash-row" style="align-items:center;">
-                <span style="color:#fff;">🔋 Load (Real)</span>
+                <span style="color:#fff;">🔋 Load (Total)</span>
                 <div style="display:flex; align-items:center; gap:5px;">
                     <span class="dash-val" style="color:#fff;">${fmt(stats.optimized)} / </span>
                     <input type="number" 
@@ -204,13 +207,13 @@ const renderInspector = () => {
             </div>
             
             <div style="text-align:right; font-size:9px; color:#555; margin-top:3px;">
-                Src: ${stats.source}
+                Chat: ${fmt(stats.chatOnly)}
             </div>
         </div>
 
         <div class="ins-body">
             <div style="display:flex; gap:5px; margin-bottom:10px;">
-                <input type="number" id="chronos-search-id" placeholder="Msg ID..." style="background:#222; border:1px solid #444; color:#fff; width:60px; padding:4px; border-radius:3px;">
+                <input type="number" id="chronos-search-id" placeholder="ID..." style="background:#222; border:1px solid #444; color:#fff; width:60px; padding:4px; border-radius:3px;">
                 <button onclick="searchById()" style="background:#D500F9; border:none; color:#000; padding:4px 10px; border-radius:3px; cursor:pointer; font-weight:bold;">INSPECT</button>
             </div>
             
@@ -237,7 +240,7 @@ const injectStyles = () => {
             position: fixed; top: 150px; right: 20px; width: 40px; height: 40px;
             background: radial-gradient(circle, rgba(20,0,30,0.9) 0%, rgba(0,0,0,1) 100%);
             border: 2px solid #D500F9; border-radius: 50%;
-            z-index: 2147483647; /* MAX Z-INDEX */
+            z-index: 2147483647; 
             cursor: pointer; display: flex; align-items: center; justify-content: center;
             font-size: 20px; color: #E040FB; 
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6), inset 0 0 10px rgba(213, 0, 249, 0.3);
@@ -254,7 +257,7 @@ const injectStyles = () => {
             border: 1px solid #D500F9; border-top: 3px solid #D500F9;
             color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 12px;
             display: none; 
-            z-index: 2147483647; /* MAX Z-INDEX */
+            z-index: 2147483647;
             border-radius: 8px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.8); backdrop-filter: blur(10px);
             overflow: hidden;
@@ -384,14 +387,12 @@ window.viewAIVersion = (index) => {
 // 7. INITIALIZATION
 // =================================================================
 const createUI = () => {
-    // ลบของเก่าออกก่อนสร้างใหม่
     const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
 
     const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
     const ins = document.createElement('div'); ins.id = 'chronos-inspector';
     
-    // ใช้ appendChild เพื่อความปลอดภัยสูงสุดในทุกเบราว์เซอร์
     document.body.appendChild(orb); 
     document.body.appendChild(ins);
     
@@ -409,12 +410,11 @@ const createUI = () => {
     setTimeout(createUI, 2000); 
 
     if (typeof SillyTavern !== 'undefined') {
-        console.log(`[${extensionName}] Ready. Absolute Fix Mode.`);
+        console.log(`[${extensionName}] Ready. Total Recall Mode.`);
         
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
 
-        // 🔥 Auto-refresh loop
         setInterval(() => {
             const ins = document.getElementById('chronos-inspector');
             if (ins && ins.style.display === 'block') {
@@ -425,4 +425,4 @@ const createUI = () => {
         console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
-        
+    
