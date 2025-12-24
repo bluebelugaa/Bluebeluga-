@@ -1,8 +1,8 @@
-// index.js - Chronos V27 (Perfect Calibration) 🎯⚖️
+// index.js - Chronos V28 (Base Splitter) 🧱💬
 
-const extensionName = "Chronos_V27_Calibration";
+const extensionName = "Chronos_V28_BaseSplit";
 
-// ค่าตัวหารเริ่มต้น
+// ค่าตัวหารเริ่มต้น (Calibration)
 let calibration = {
     thaiDivisor: 1.3,
     engDivisor: 3.5
@@ -29,34 +29,45 @@ const estimateTokens = (text) => {
     return Math.round(thaiChars / calibration.thaiDivisor) + Math.round(otherChars / calibration.engDivisor);
 };
 
-// คำนวณ Context แบบคู่ขนาน (Raw vs Real)
-const calculateDualContext = () => {
-    if (typeof SillyTavern === 'undefined') return { raw: 0, real: 0, max: 0, count: 0 };
+// คำนวณแยกส่วน (Base vs Chat)
+const calculateDetailedStats = () => {
+    if (typeof SillyTavern === 'undefined') return { baseRaw: 0, chatRaw: 0, chatReal: 0, totalRaw: 0, totalReal: 0, max: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
     const maxTokens = context.max_context || 8192; 
     
-    // 1. Base Tokens
+    // --- 1. คำนวณ Base (System + Card) ---
+    // ส่วนนี้คือ "ค่าหัวคิว" ที่ลบไม่ได้
     let baseRaw = 0;
+    
+    // ดึงข้อมูลการ์ด
     if (context.characterId && SillyTavern.characters && SillyTavern.characters[context.characterId]) {
         const char = SillyTavern.characters[context.characterId];
-        const baseText = (char.description || "") + (char.first_mes || "") + (char.personality || "") + (char.scenario || "");
-        baseRaw = estimateTokens(baseText) + 500;
+        const charText = (char.description || "") + (char.personality || "") + (char.scenario || "") + (char.first_mes || "");
+        baseRaw += estimateTokens(charText);
     }
     
-    // 2. Chat History
-    let currentRaw = baseRaw;
-    let currentReal = baseRaw;
-    let rememberedMsgCount = 0;
+    // บวกค่า System Prompt โดยประมาณ (User ไม่ค่อยเห็นแต่มันมีอยู่)
+    // ปกติ System Prompt จะประมาณ 300-800 Tokens แล้วแต่ Preset
+    baseRaw += 600; 
+
+    // --- 2. คำนวณ Chat (เฉพาะข้อความ) ---
+    let chatRaw = 0;
+    let chatReal = 0;
+    let rememberedCount = 0;
+    
+    // เริ่มนับจาก Base ขึ้นมา
+    let currentRealTotal = baseRaw;
+    let currentRawTotal = baseRaw;
 
     for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
         
-        // แบบ Raw (เหมือน Silly) -> นับดื้อๆ เลย
+        // Raw (รวม HTML)
         const rawTok = estimateTokens(msg.mes) + 5;
         
-        // แบบ Real (ของ Extension) -> ตัดก่อนนับ
+        // Real (ตัด HTML)
         let content = msg.mes;
         if (content.includes('<') && content.includes('>')) {
             const clean = stripHtmlToText(content);
@@ -64,17 +75,28 @@ const calculateDualContext = () => {
         }
         const realTok = estimateTokens(content) + 5;
 
-        // เช็คโควต้า (ใช้ยอด Real เป็นตัวตัดเกณฑ์ เพราะเราส่งแบบ Real)
-        if (currentReal + realTok < maxTokens) {
-            currentRaw += rawTok;
-            currentReal += realTok;
-            rememberedMsgCount++;
+        // เช็คโควต้า (ตัดจบเมื่อ Real เต็ม)
+        if (currentRealTotal + realTok < maxTokens) {
+            chatRaw += rawTok;
+            chatReal += realTok;
+            
+            currentRawTotal += rawTok;
+            currentRealTotal += realTok;
+            rememberedCount++;
         } else {
             break;
         }
     }
 
-    return { raw: currentRaw, real: currentReal, max: maxTokens, count: rememberedMsgCount };
+    return {
+        base: baseRaw,        // โทเคนพื้นฐาน (Card+System)
+        chatRaw: chatRaw,     // แชทแบบดิบ
+        chatReal: chatReal,   // แชทแบบตัดโค้ด
+        totalRaw: currentRawTotal, // ยอดรวมดิบ (เอาไว้เทียบ Silly)
+        totalReal: currentRealTotal, // ยอดรวมจริง (ส่งจริง)
+        max: maxTokens,
+        count: rememberedCount
+    };
 };
 
 // =================================================================
@@ -121,6 +143,7 @@ const injectStyles = () => {
         
         .dashboard-zone { background: #000; padding: 10px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .sub-row { display: flex; justify-content: space-between; margin-bottom: 2px; padding-left: 10px; color: #777; font-size: 10px; }
         
         .ins-body { padding: 10px; }
         .search-row { display: flex; gap: 5px; margin-bottom: 10px; }
@@ -166,9 +189,7 @@ const createUI = () => {
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     const chat = SillyTavern.getContext().chat || [];
-    
-    // คำนวณ 2 แบบ
-    const stats = calculateDualContext();
+    const stats = calculateDetailedStats();
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -178,7 +199,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🎯 CALIBRATOR V27</span>
+            <span>🧱 BASE SPLITTER V28</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -188,39 +209,41 @@ const renderInspector = () => {
         </div>
 
         <div class="calib-zone">
-            <div style="color:#E040FB; margin-bottom:5px;">จูนค่าหาร (Divisor):</div>
+            <div style="color:#E040FB; margin-bottom:5px;">Divisor:</div>
             <div class="calib-row">
-                <span>🇹🇭 ไทย (1.3):</span>
-                <input type="number" step="0.1" value="${calibration.thaiDivisor}" class="calib-input" onchange="updateCalib('thai', this.value)">
+                <span>🇹🇭TH (1.3):</span> <input type="number" step="0.1" value="${calibration.thaiDivisor}" class="calib-input" onchange="updateCalib('thai', this.value)">
+                <span>🇺🇸EN (3.5):</span> <input type="number" step="0.1" value="${calibration.engDivisor}" class="calib-input" onchange="updateCalib('eng', this.value)">
             </div>
-            <div class="calib-row">
-                <span>🇺🇸 Eng (3.5):</span>
-                <input type="number" step="0.1" value="${calibration.engDivisor}" class="calib-input" onchange="updateCalib('eng', this.value)">
-            </div>
-            <button onclick="renderInspector()" style="width:100%; margin-top:5px; background:#333; color:#fff; border:none; cursor:pointer;">🔄 คำนวณใหม่</button>
+            <button onclick="renderInspector()" style="width:100%; margin-top:5px; background:#333; color:#fff; border:none; cursor:pointer;">🔄 Refresh</button>
         </div>
 
         <div class="dashboard-zone">
             <div class="dash-row" style="border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:5px;">
-                <span style="color:#FF9800;">🟠 Raw (เทียบ Silly):</span>
-                <b style="color:#FF9800;">${stats.raw} Tok</b>
+                <span style="color:#FF9800;">🟠 Total Raw:</span>
+                <b style="color:#FF9800;">${stats.totalRaw} Tok</b>
             </div>
             
-            <div class="dash-row">
-                <span style="color:#00E676;">🟢 Real (ส่งจริง):</span>
-                <b style="color:#00E676;">${stats.real} / ${stats.max}</b>
+            <div class="sub-row">
+                <span>🧱 Base (System+Card):</span>
+                <span>${stats.base}</span>
             </div>
-            
-            <div class="dash-row" style="margin-top:8px;">
-                <span style="color:#aaa;">จำได้จริง:</span>
-                <span style="color:#E040FB;">${stats.count} ข้อความล่าสุด</span>
+            <div class="sub-row">
+                <span>💬 Chat History:</span>
+                <span>${stats.chatRaw}</span>
+            </div>
+
+            <div class="dash-row" style="margin-top:10px; border-top:1px solid #555; padding-top:5px;">
+                <span style="color:#00E676;">🟢 Total Real:</span>
+                <b style="color:#00E676;">${stats.totalReal} / ${stats.max}</b>
+            </div>
+            <div class="sub-row">
+                <span style="color:#00E676;">(Chat Real: ${stats.chatReal})</span>
             </div>
         </div>
 
         <div class="ins-body">
             <div class="search-row">
-                <span>ส่อง ID:</span>
-                <input type="number" id="chronos-search-id" class="search-input" placeholder="ID">
+                <span>ID:</span> <input type="number" id="chronos-search-id" class="search-input">
                 <button class="search-btn" onclick="searchById()">Check</button>
             </div>
             <div class="msg-list">${listHtml}</div>
@@ -313,5 +336,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-}
-
+            }
+        
