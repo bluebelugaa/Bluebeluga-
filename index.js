@@ -260,4 +260,43 @@ const makeDraggable = (elm, type) => {
     };
     elm.onmousedown = dragStart; elm.ontouchstart = dragStart;
 };
-    
+
+window.viewAIVersion = (index) => {
+    const chat = SillyTavern.getContext().chat || [];
+    const msg = chat[index];
+    if (!msg) return;
+    const wrapper = document.getElementById('view-target-wrapper');
+    const content = document.getElementById('view-target-content');
+    wrapper.style.display = 'block';
+    let text = msg.mes;
+    if (/<[^>]+>|&lt;[^&]+&gt;/.test(text)) text = `[System Content:\n${stripHtmlToText(text)}]`;
+    content.innerHTML = `<div class="view-area">${text.replace(/</g, '&lt;')}</div>`;
+};
+
+const createUI = () => {
+    const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
+    const ins = document.createElement('div'); ins.id = 'chronos-inspector';
+    document.body.append(orb, ins);
+    orb.onclick = () => {
+        if (orb.getAttribute('data-dragging') === 'true') return;
+        ins.style.display = ins.style.display === 'none' ? 'block' : 'none';
+        if (ins.style.display === 'block') renderInspector();
+    };
+    makeDraggable(orb, 'orb'); makeDraggable(ins, 'panel');
+};
+
+(function() {
+    injectStyles();
+    setTimeout(createUI, 1500); 
+    if (typeof SillyTavern !== 'undefined') {
+        console.log(`[${extensionName}] Ready.`);
+        SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
+        SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
+        setInterval(() => {
+            if (document.getElementById('chronos-inspector')?.style.display === 'block') {
+                renderInspector();
+            }
+        }, 2000);
+    }
+})();
+
