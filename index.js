@@ -1,9 +1,9 @@
-// index.js - Chronos V36 (Deep Link Context) 🔗🎯
+// index.js - Chronos V37 (The Final Form) 🏙️🧠
 
-const extensionName = "Chronos_V36_DeepLink";
+const extensionName = "Chronos_V37_Final";
 
 // =================================================================
-// 1. Logic: Tokenizer (เรียกใช้ของ SillyTavern)
+// 1. Logic: Tokenizer Wrapper (ใช้ระบบนับของ SillyTavern)
 // =================================================================
 const getSysTokenCount = (text) => {
     if (!text) return 0;
@@ -33,93 +33,95 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. Logic: Calculator (ดึงค่าจากหน้าจอ + ระบบ)
+// 2. Logic: Calculator (คำนวณตามโจทย์ใหม่)
 // =================================================================
-const calculateSystemStats = () => {
-    if (typeof SillyTavern === 'undefined') return { used: 0, max: 0, saved: 0, memory: 0, totalMsgs: 0 };
+const calculateStats = () => {
+    if (typeof SillyTavern === 'undefined') return { memoryRange: "N/A", used: 0, remaining: 0, saved: 0, max: 0 };
     
     const context = SillyTavern.getContext();
-    
-    // --- 1. ดึง Max Context (แก้ปัญหาเลขไม่ตรง) ---
+    const chat = context.chat || [];
+
+    // --- 1. ดึง Max Context (จากหน้าจอโดยตรง) ---
+    // พยายามดึงจากช่อง Setting ก่อน เพื่อให้ตรงกับที่ตาเห็น
     let maxTokens = 0;
-    
-    // วิธีที่ 1: ดึงจาก DOM (หลอดเลื่อน Setting) *แม่นยำที่สุดเพราะคือสิ่งที่ตาเห็น*
-    const maxContextInput = document.getElementById('max_context');
-    if (maxContextInput) {
-        maxTokens = parseInt(maxContextInput.value);
-    }
-    
-    // วิธีที่ 2: ถ้าหาไม่เจอ ให้ใช้ค่าจาก Internal Variable
-    if (!maxTokens || isNaN(maxTokens)) {
-        maxTokens = context.max_context || 8192;
+    const maxInput = document.getElementById('max_context');
+    if (maxInput) {
+        maxTokens = parseInt(maxInput.value);
+    } else {
+        maxTokens = context.max_context || 8192; // Fallback
     }
 
-    // --- 2. ดึง Current Tokens (ที่ระบบนับไว้แล้ว) ---
-    let currentUsed = context.tokens || 0;
-    
-    // Fallback: ดึงจาก UI Bar ถ้าหาตัวแปรไม่เจอ
-    if (currentUsed === 0 && document.getElementById('token_count_bar')) {
+    // --- 2. ดึงยอดปัจจุบันจากระบบ (Raw Total) ---
+    let systemRawTotal = context.tokens || 0;
+    // Fallback ดึงจาก Bar ด้านบนถ้าหาไม่เจอ
+    if (systemRawTotal === 0 && document.getElementById('token_count_bar')) {
         const text = document.getElementById('token_count_bar').innerText;
         const match = text.match(/(\d+)/);
-        if (match) currentUsed = parseInt(match[1]);
+        if (match) systemRawTotal = parseInt(match[1]);
     }
 
-    // --- 3. คำนวณ Savings & Real ---
+    // --- 3. คำนวณยอด Real Used & Savings ---
     let totalSaved = 0;
-    const chat = context.chat || [];
-    let chatRealTokens = []; 
+    let chatRealSizes = []; // เก็บขนาดจริงของแต่ละข้อความไว้คำนวณ Memory
 
-    // วนลูปคำนวณส่วนต่าง และเก็บขนาดจริงของแต่ละข้อความเพื่อคำนวณ Memory
-    chat.forEach(msg => {
-        const rawContent = msg.mes || "";
+    chat.forEach((msg, index) => {
+        const rawLen = getSysTokenCount(msg.mes) + 5; // +5 metadata
         
-        // ถ้านับแบบดิบ (Raw)
-        const rawLen = getSysTokenCount(rawContent) + 5; // +5 metadata overhead estimate
-
-        // ถ้านับแบบตัด (Real)
-        let cleanContent = rawContent;
+        let cleanContent = msg.mes;
         if (cleanContent.includes('<') && cleanContent.includes('>')) {
             const clean = stripHtmlToText(cleanContent);
             cleanContent = `[System Content:\n${clean}]`;
         }
         const realLen = getSysTokenCount(cleanContent) + 5;
         
-        // เก็บค่าจริงไว้คำนวณ Memory
-        chatRealTokens.push(realLen);
+        // เก็บขนาดจริงไว้คำนวณ Memory
+        chatRealSizes.push({ index: index, size: realLen });
 
-        // ส่วนต่างคือยอดประหยัด
         const diff = Math.max(0, rawLen - realLen);
         totalSaved += diff;
     });
 
-    const realUsage = Math.max(0, currentUsed - totalSaved);
+    const realUsed = Math.max(0, systemRawTotal - totalSaved);
+    const remaining = Math.max(0, maxTokens - realUsed);
 
-    // --- 4. คำนวณ Memory Depth (จำได้กี่ข้อความ) ---
-    // สูตร: Max - (Base Tokens) = พื้นที่เหลือให้แชท
-    // Base Tokens ประมาณการจาก = RealUsage - (ผลรวมแชทจริงทั้งหมด)
-    const totalChatRealSum = chatRealTokens.reduce((a, b) => a + b, 0);
-    const estimatedBase = Math.max(0, realUsage - totalChatRealSum);
+    // --- 4. คำนวณ Memory Range (จำได้จากไหนถึงไหน) ---
+    // Base Tokens (System/Card) = RealUsed - (ผลรวมแชททั้งหมด)
+    const totalChatRealSum = chatRealSizes.reduce((sum, item) => sum + item.size, 0);
+    const baseTokens = Math.max(0, realUsed - totalChatRealSum);
     
-    let currentLoad = estimatedBase;
+    let currentLoad = baseTokens;
+    let startMsgIndex = 0;
+    
+    // วนลูปจาก "ล่าสุด" ย้อนกลับไป "อดีต"
+    // เพื่อดูว่า Memory เต็มที่ข้อความไหน
     let rememberedCount = 0;
-
-    // นับย้อนหลัง
-    for (let i = chatRealTokens.length - 1; i >= 0; i--) {
-        if (currentLoad + chatRealTokens[i] <= maxTokens) {
-            currentLoad += chatRealTokens[i];
+    for (let i = chatRealSizes.length - 1; i >= 0; i--) {
+        const msgSize = chatRealSizes[i].size;
+        if (currentLoad + msgSize <= maxTokens) {
+            currentLoad += msgSize;
+            startMsgIndex = chatRealSizes[i].index; // จำข้อความนี้ได้
             rememberedCount++;
         } else {
-            break; 
+            break; // เต็มแล้ว หยุดนับ
         }
     }
 
+    // สร้างข้อความแสดงผลช่วง
+    let memoryRangeText = "";
+    if (chat.length === 0) {
+        memoryRangeText = "ยังไม่มีข้อความ";
+    } else if (rememberedCount === chat.length) {
+        memoryRangeText = `All (#0 - #${chat.length - 1})`;
+    } else {
+        memoryRangeText = `#${startMsgIndex} ➔ #${chat.length - 1}`;
+    }
+
     return {
-        used: currentUsed,  // Raw (Silly Sees)
-        real: realUsage,    // Real (Sent)
-        max: maxTokens,     // Max Limit
-        saved: totalSaved,  // Total Saved
-        memory: rememberedCount, // # Messages remembered
-        totalMsgs: chat.length
+        memoryRange: memoryRangeText,
+        used: realUsed,
+        remaining: remaining,
+        saved: totalSaved,
+        max: maxTokens
     };
 };
 
@@ -140,7 +142,7 @@ const injectStyles = () => {
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
         #chronos-inspector {
-            position: fixed; top: 80px; right: 70px; width: 320px; 
+            position: fixed; top: 80px; right: 70px; width: 300px; 
             background: rgba(15, 0, 20, 0.98); border: 2px solid #D500F9;
             color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 11px;
             display: none; z-index: 999999; border-radius: 12px;
@@ -149,9 +151,10 @@ const injectStyles = () => {
         .ins-header { background: linear-gradient(90deg, #330044, #5c007a); color: #fff; padding: 8px 10px; font-weight: bold; border-bottom: 1px solid #D500F9; display: flex; justify-content: space-between; }
         .control-zone { display: flex; gap: 10px; padding: 5px 10px; background: #220033; border-bottom: 1px solid #550077; font-size: 10px; color: #00E676; }
         
-        .dashboard-zone { background: #000; padding: 10px; border-bottom: 1px solid #333; }
-        .dash-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
-        .progress-bg { width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 5px; }
+        .dashboard-zone { background: #000; padding: 12px; border-bottom: 1px solid #333; }
+        .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
+        
+        .progress-bg { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 5px; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, #00E676, #00C853); width: 0%; transition: width 0.5s; }
 
         .ins-body { padding: 10px; }
@@ -190,10 +193,9 @@ const createUI = () => {
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     const chat = SillyTavern.getContext().chat || [];
-    const stats = calculateSystemStats();
+    const stats = calculateStats();
     
-    // คำนวณ % หลอด (เทียบกับค่า Max ที่ดึงมาใหม่)
-    const percent = stats.max > 0 ? Math.min((stats.real / stats.max) * 100, 100) : 0;
+    const percent = stats.max > 0 ? Math.min((stats.used / stats.max) * 100, 100) : 0;
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -203,7 +205,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🔗 CHRONOS V36</span>
+            <span>CHRONOS V37 (FINAL)</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -213,27 +215,22 @@ const renderInspector = () => {
         </div>
 
         <div class="dashboard-zone">
-            <div class="dash-row">
-                <span style="color:#aaa;">🧠 Memory Depth:</span>
-                <b style="color:#E040FB;">${stats.memory} / ${stats.totalMsgs} msgs</b>
+            <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 5px;">
+                <span style="color:#aaa;">🧠 Memory Range:</span>
+                <b style="color:#E040FB;">${stats.memoryRange}</b>
             </div>
             
-            <div class="dash-row">
-                <span style="color:#aaa;">🛡️ Total Saved:</span>
-                <b style="color:#00E676;">-${stats.saved} Tok</b>
+            <div class="dash-row" style="margin-top: 8px;">
+                <span style="color:#00E676;">Used: ${stats.used}</span>
+                <span style="color:#FF9800;">Free: ${stats.remaining}</span>
             </div>
-            
-            <div class="dash-row" style="margin-top:8px;">
-                <span style="color:#aaa;">Usage (Real/Max):</span>
-                <b style="color:#fff;">${stats.real} / ${stats.max}</b>
-            </div>
-
             <div class="progress-bg">
                 <div class="progress-fill" style="width: ${percent}%"></div>
             </div>
             
-            <div style="font-size:9px; color:#555; text-align:right; margin-top:2px;">
-                (Silly Sees: ${stats.used})
+            <div class="dash-row" style="margin-top: 5px; font-size: 10px; color:#555;">
+                <span>Total: ${stats.max}</span>
+                <span>Saved: -${stats.saved}</span>
             </div>
         </div>
 
@@ -243,7 +240,7 @@ const renderInspector = () => {
                 <button class="search-btn" onclick="searchById()">Check</button>
             </div>
             
-            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Last 5 Messages:</div>
+            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Recent:</div>
             <div class="msg-list">${listHtml}</div>
             
             <div id="view-target-wrapper">
@@ -253,6 +250,9 @@ const renderInspector = () => {
     `;
 };
 
+// =================================================================
+// Drag & View Logic
+// =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
     if (type === 'panel') {
@@ -287,7 +287,6 @@ const makeDraggable = (elm, type) => {
     elm.onmousedown = dragStart; elm.ontouchstart = dragStart;
 };
 
-// View Logic (Fixed)
 window.searchById = () => {
     const idInput = document.getElementById('chronos-search-id');
     const id = parseInt(idInput.value);
@@ -297,7 +296,7 @@ window.searchById = () => {
 };
 
 window.viewAIVersion = (index) => {
-    const context = SillyTavern.getContext(); // Refresh Context
+    const context = SillyTavern.getContext(); 
     const chat = context.chat || [];
     const msg = chat[index];
 
@@ -309,9 +308,7 @@ window.viewAIVersion = (index) => {
     const contentDiv = document.getElementById('view-target-content');
     if (!contentDiv) return;
 
-    // คำนวณด้วย System Tokenizer
     const rawTokens = getSysTokenCount(msg.mes);
-    
     const cleanText = stripHtmlToText(msg.mes);
     const aiViewText = `[System Content:\n${cleanText}]`;
     const cleanTokens = getSysTokenCount(aiViewText);
@@ -349,5 +346,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-        }
+}
 
