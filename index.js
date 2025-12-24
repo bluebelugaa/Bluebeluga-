@@ -1,16 +1,15 @@
+// index.js - Chronos V27 (Perfect Calibration) 🎯⚖️
 
-// index.js - Chronos V26 (The Calibrator) 🇹🇭🎛️
+const extensionName = "Chronos_V27_Calibration";
 
-const extensionName = "Chronos_V26_Calibrator";
-
-// ค่าตัวหารเริ่มต้น (ปรับได้ในหน้าต่าง)
+// ค่าตัวหารเริ่มต้น
 let calibration = {
-    thaiDivisor: 1.3,  // ภาษาไทย: 1 Token ≈ 1.3 ตัวอักษร
-    engDivisor: 3.5    // อังกฤษ: 1 Token ≈ 3.5 ตัวอักษร
+    thaiDivisor: 1.3,
+    engDivisor: 3.5
 };
 
 // =================================================================
-// 1. Logic: Stripper (ล้างโค้ด)
+// Logic
 // =================================================================
 const stripHtmlToText = (html) => {
     let text = html.replace(/<br\s*\/?>/gi, '\n')
@@ -23,67 +22,63 @@ const stripHtmlToText = (html) => {
     return text;
 };
 
-// =================================================================
-// 2. Logic: Configurable Token Estimator (ตัวนับแบบปรับจูนได้)
-// =================================================================
 const estimateTokens = (text) => {
     if (!text) return 0;
-    
-    // แยกนับ
     const thaiChars = (text.match(/[\u0E00-\u0E7F]/g) || []).length;
     const otherChars = text.length - thaiChars;
-
-    // ใช้ค่าจากตัวแปร Calibration
-    const thaiTokens = Math.round(thaiChars / calibration.thaiDivisor);
-    const otherTokens = Math.round(otherChars / calibration.engDivisor);
-
-    return thaiTokens + otherTokens;
+    return Math.round(thaiChars / calibration.thaiDivisor) + Math.round(otherChars / calibration.engDivisor);
 };
 
-// =================================================================
-// 3. Logic: Context Calculator
-// =================================================================
-const calculateRealContext = () => {
-    if (typeof SillyTavern === 'undefined') return { used: 0, max: 0, count: 0, total: 0 };
+// คำนวณ Context แบบคู่ขนาน (Raw vs Real)
+const calculateDualContext = () => {
+    if (typeof SillyTavern === 'undefined') return { raw: 0, real: 0, max: 0, count: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
     const maxTokens = context.max_context || 8192; 
     
-    // 1. Base Tokens (Card + System)
-    let baseTokens = 0;
+    // 1. Base Tokens
+    let baseRaw = 0;
     if (context.characterId && SillyTavern.characters && SillyTavern.characters[context.characterId]) {
         const char = SillyTavern.characters[context.characterId];
         const baseText = (char.description || "") + (char.first_mes || "") + (char.personality || "") + (char.scenario || "");
-        baseTokens = estimateTokens(baseText) + 500; // +System Prompt
+        baseRaw = estimateTokens(baseText) + 500;
     }
     
     // 2. Chat History
-    let currentTokens = baseTokens;
+    let currentRaw = baseRaw;
+    let currentReal = baseRaw;
     let rememberedMsgCount = 0;
 
     for (let i = chat.length - 1; i >= 0; i--) {
         const msg = chat[i];
+        
+        // แบบ Raw (เหมือน Silly) -> นับดื้อๆ เลย
+        const rawTok = estimateTokens(msg.mes) + 5;
+        
+        // แบบ Real (ของ Extension) -> ตัดก่อนนับ
         let content = msg.mes;
         if (content.includes('<') && content.includes('>')) {
             const clean = stripHtmlToText(content);
             content = `[System Content:\n${clean}]`;
         }
-        
-        const tokens = estimateTokens(content) + 5;
-        if (currentTokens + tokens < maxTokens) {
-            currentTokens += tokens;
+        const realTok = estimateTokens(content) + 5;
+
+        // เช็คโควต้า (ใช้ยอด Real เป็นตัวตัดเกณฑ์ เพราะเราส่งแบบ Real)
+        if (currentReal + realTok < maxTokens) {
+            currentRaw += rawTok;
+            currentReal += realTok;
             rememberedMsgCount++;
         } else {
             break;
         }
     }
 
-    return { used: currentTokens, max: maxTokens, count: rememberedMsgCount, totalMsgs: chat.length };
+    return { raw: currentRaw, real: currentReal, max: maxTokens, count: rememberedMsgCount };
 };
 
 // =================================================================
-// 4. UI: Calibrator Dashboard
+// UI
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
@@ -120,18 +115,12 @@ const injectStyles = () => {
             display: flex; gap: 10px; padding: 5px 10px; background: #220033;
             border-bottom: 1px solid #550077; font-size: 10px; color: #00E676;
         }
-        
-        /* Zone ปรับจูน (Calibration) */
-        .calib-zone {
-            background: #111; padding: 10px; border-bottom: 1px solid #333;
-        }
+        .calib-zone { background: #111; padding: 10px; border-bottom: 1px solid #333; }
         .calib-row { display: flex; align-items: center; gap: 5px; margin-bottom: 5px; }
-        .calib-input { background: #000; border: 1px solid #555; color: #fff; width: 40px; text-align: center; }
+        .calib-input { background: #000; border: 1px solid #555; color: #fff; width: 50px; text-align: center; }
         
         .dashboard-zone { background: #000; padding: 10px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
-        .progress-bg { width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 5px; }
-        .progress-fill { height: 100%; background: linear-gradient(90deg, #00E676, #00C853); width: 0%; transition: width 0.5s; }
         
         .ins-body { padding: 10px; }
         .search-row { display: flex; gap: 5px; margin-bottom: 10px; }
@@ -178,8 +167,8 @@ const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     const chat = SillyTavern.getContext().chat || [];
     
-    const stats = calculateRealContext();
-    const percent = Math.min((stats.used / stats.max) * 100, 100);
+    // คำนวณ 2 แบบ
+    const stats = calculateDualContext();
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -189,7 +178,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🎛️ CALIBRATION MODE</span>
+            <span>🎯 CALIBRATOR V27</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -199,26 +188,32 @@ const renderInspector = () => {
         </div>
 
         <div class="calib-zone">
-            <div style="color:#E040FB; margin-bottom:5px;">ตั้งค่าตัวหาร (Divisor):</div>
+            <div style="color:#E040FB; margin-bottom:5px;">จูนค่าหาร (Divisor):</div>
             <div class="calib-row">
-                <span>🇹🇭 ไทย:</span>
+                <span>🇹🇭 ไทย (1.3):</span>
                 <input type="number" step="0.1" value="${calibration.thaiDivisor}" class="calib-input" onchange="updateCalib('thai', this.value)">
-                <span style="color:#aaa; font-size:9px;">(ยิ่งน้อย = เลขยิ่งเยอะ)</span>
             </div>
             <div class="calib-row">
-                <span>🇺🇸 Eng:</span>
+                <span>🇺🇸 Eng (3.5):</span>
                 <input type="number" step="0.1" value="${calibration.engDivisor}" class="calib-input" onchange="updateCalib('eng', this.value)">
             </div>
             <button onclick="renderInspector()" style="width:100%; margin-top:5px; background:#333; color:#fff; border:none; cursor:pointer;">🔄 คำนวณใหม่</button>
         </div>
 
         <div class="dashboard-zone">
-            <div class="dash-row">
-                <span style="color:#aaa;">Est. Usage:</span>
-                <span style="color:#00E676;">${stats.used} / ${stats.max} Tok</span>
+            <div class="dash-row" style="border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:5px;">
+                <span style="color:#FF9800;">🟠 Raw (เทียบ Silly):</span>
+                <b style="color:#FF9800;">${stats.raw} Tok</b>
             </div>
-            <div class="progress-bg">
-                <div class="progress-fill" style="width: ${percent}%"></div>
+            
+            <div class="dash-row">
+                <span style="color:#00E676;">🟢 Real (ส่งจริง):</span>
+                <b style="color:#00E676;">${stats.real} / ${stats.max}</b>
+            </div>
+            
+            <div class="dash-row" style="margin-top:8px;">
+                <span style="color:#aaa;">จำได้จริง:</span>
+                <span style="color:#E040FB;">${stats.count} ข้อความล่าสุด</span>
             </div>
         </div>
 
@@ -234,7 +229,6 @@ const renderInspector = () => {
     `;
 };
 
-// ฟังก์ชันอัปเดตค่า Calibration
 window.updateCalib = (type, value) => {
     const val = parseFloat(value);
     if (val > 0) {
@@ -319,5 +313,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-                                                    }
-            
+}
+    
