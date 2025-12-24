@@ -1,9 +1,9 @@
-// index.js - Chronos V53 (Infinite Horizon) 🌌🔓
-// Logic: Auto-Expand Limit + 1M Context Support
-// Fixes: 8192 Stuck Issue when "Unlock Context" is active
-// UI: Neon V39 Style
 
-const extensionName = "Chronos_V53_InfiniteHorizon";
+// index.js - Chronos V54 (True Mirror) 🪞✨
+// Logic: Mirrors the EXACT value from the "Context Size" slider input
+// Fixes: 8192 stuck issue by reading the DOM input directly
+
+const extensionName = "Chronos_V54_TrueMirror";
 
 // =================================================================
 // 1. HELPERS
@@ -51,7 +51,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. INFINITE CALCULATOR (THE FIX)
+// 3. TRUE MIRROR CALCULATOR (THE FIX)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Loading...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -75,6 +75,7 @@ const calculateStats = () => {
 
     // --- B. BASE LOAD (DOM SYNC) ---
     let stTotalTokens = context.tokens || 0;
+    // พยายามดึงจาก Token Counter บาร์บนสุดก่อน
     const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
     if (tokenCounterEl) {
         const text = tokenCounterEl.innerText || "";
@@ -84,55 +85,57 @@ const calculateStats = () => {
             if (!isNaN(domCurrent) && domCurrent > 0) stTotalTokens = domCurrent;
         }
     }
+    // Fallback
     if (stTotalTokens === 0 && chat.length > 0) {
          let manualChat = 0;
          chat.forEach(m => manualChat += quickCount(m.mes));
          stTotalTokens = manualChat + 2000;
     }
 
-    // --- C. TRUE MAX (INFINITE LOGIC) ---
-    let maxTokens = 8192; // ค่าเริ่มต้น
-    let isUnlocked = false;
+    // --- C. TRUE MIRROR LOGIC (READ SLIDER DIRECTLY) ---
+    let maxTokens = 8192; // Default fallback
 
-    // 1. Check Unlock Settings
-    if (SillyTavern.settings) {
-        if (SillyTavern.settings.unlock_context || SillyTavern.settings.unlocked_context) {
-            isUnlocked = true;
+    // 1. Priority: Read directly from the HTML Input Element
+    // นี่คือจุดสำคัญ: อ่านค่าจากกล่องตัวเลขที่คุณพิมพ์หรือเลื่อน Slider ไว้
+    const maxCtxInput = document.getElementById('max_context');
+    if (maxCtxInput) {
+        const val = parseInt(maxCtxInput.value);
+        if (!isNaN(val) && val > 0) {
+            maxTokens = val;
         }
-    }
-
-    // 2. Apply Logic
-    if (isUnlocked) {
-        // ถ้าปลดล็อคแล้ว ตั้งเพดานไว้ที่ 1 ล้าน (เผื่อ Gemini)
-        maxTokens = 1000000; 
     } else {
-        // ถ้าไม่ได้ปลดล็อค ก็พยายามหาค่าจาก Slider
-        const maxCtxInput = document.getElementById('max_context');
-        if (maxCtxInput && !isNaN(parseInt(maxCtxInput.value))) {
-            maxTokens = parseInt(maxCtxInput.value);
-        } else if (context.max_context) {
-            maxTokens = context.max_context;
+        // 2. Secondary: Internal Settings variable
+        if (SillyTavern.settings && SillyTavern.settings.context_size) {
+            maxTokens = parseInt(SillyTavern.settings.context_size);
         }
     }
 
-    // 3. FINAL OVERRIDE (The "Stuck Fix")
-    // ถ้าโหลดจริง (71k) ดันทะลุ Max (8k) แสดงว่า Max ผิดแน่นอน -> ถีบ Max ขึ้นไปเลย
-    const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
-    if (finalOptimizedLoad > maxTokens) {
-        maxTokens = finalOptimizedLoad; // Force equal (Full bar)
+    // 3. Final Sanity Check: If Unlock is checked but value is low, trust context_size
+    if (SillyTavern.settings?.unlock_context && maxTokens <= 8192) {
+         if (SillyTavern.settings.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
     }
+
+    const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
+
+    // Memory Range Label
+    let memoryRangeText = "Healthy";
+    const percent = maxTokens > 0 ? (finalOptimizedLoad / maxTokens) : 0;
+    
+    if (percent > 1) memoryRangeText = "Overflow";
+    else if (percent > 0.9) memoryRangeText = "Critical";
+    else if (percent > 0.75) memoryRangeText = "Heavy";
 
     return {
-        memoryRange: (finalOptimizedLoad / maxTokens > 0.95) ? "Limit Reached" : "Healthy",
+        memoryRange: memoryRangeText,
         original: stTotalTokens,
         optimized: finalOptimizedLoad,
         saved: totalSavings,
-        max: maxTokens
+        max: maxTokens // ค่านี้จะตรงกับ Slider เป๊ะๆ
     };
 };
 
 // =================================================================
-// 4. UI RENDERER (NEON V39)
+// 4. UI RENDERER (NEON V39 Style)
 // =================================================================
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
@@ -144,7 +147,6 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    // Percent calculation safe guard
     let percent = 0;
     if (stats.max > 0) {
         percent = (stats.optimized / stats.max) * 100;
@@ -160,9 +162,12 @@ const renderInspector = () => {
                 </div>`;
     }).join('');
 
+    // Format numbers nicely (e.g. 100,000)
+    const fmt = (n) => n.toLocaleString();
+
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V53 (Infinite)</span>
+            <span>🚀 CHRONOS V54 (Mirror)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -174,16 +179,16 @@ const renderInspector = () => {
         <div class="dashboard-zone">
             <div class="dash-row">
                 <span style="color:#aaa;">✂️ HTML Saved</span>
-                <span class="dash-val" style="color:#00E676;">-${stats.saved} toks</span>
+                <span class="dash-val" style="color:#00E676;">-${fmt(stats.saved)}</span>
             </div>
 
             <div class="dash-row">
                 <span style="color:#fff;">🔋 Load (Real)</span>
-                <span class="dash-val" style="color:#fff;">${stats.optimized} / ${stats.max >= 999999 ? '1M+' : stats.max}</span>
+                <span class="dash-val" style="color:#fff;">${fmt(stats.optimized)} / ${fmt(stats.max)}</span>
             </div>
             
             <div class="dash-row" style="margin-top:4px; font-size:10px; color:#666;">
-                <span>(ST View: ${stats.original})</span>
+                <span>(ST View: ${fmt(stats.original)})</span>
             </div>
 
             <div class="progress-container">
@@ -294,4 +299,4 @@ const createUI = () => {
         }, 2000);
     }
 })();
-
+        
