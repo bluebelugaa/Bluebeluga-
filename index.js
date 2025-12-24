@@ -1,6 +1,6 @@
-// index.js - Chronos V38 (Gemini Optimized) ♊💎
+// index.js - Chronos V39 (Context Master) 🌌📏
 
-const extensionName = "Chronos_V38_GeminiOpt";
+const extensionName = "Chronos_V39_ContextMaster";
 
 // =================================================================
 // 1. Logic: Tokenizer (ใช้ของระบบ SillyTavern 100%)
@@ -33,15 +33,15 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. Logic: Calculator (สูตรคำนวณใหม่ตามสั่ง)
+// 2. Logic: Calculator (สูตรคำนวณแบบแม่นยำ)
 // =================================================================
 const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { raw: 0, real: 0, free: 0, max: 0, memoryRange: "N/A" };
+    if (typeof SillyTavern === 'undefined') return { memoryRange: "N/A", original: 0, optimized: 0, remaining: 0, saved: 0, max: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
 
-    // --- 1. Max Context (Total ที่ตั้งค่าไว้) ---
+    // --- 1. Max Context (จาก Slider ในภาพ) ---
     let maxTokens = 0;
     const maxInput = document.getElementById('max_context');
     if (maxInput) {
@@ -50,15 +50,15 @@ const calculateStats = () => {
         maxTokens = context.max_context || 8192;
     }
 
-    // --- 2. Raw Used (นับรวมทุกอย่าง: Chat, Card, Lorebook, Jailbreak) ---
-    // context.tokens คือยอดรวมที่ SillyTavern คำนวณเตรียมส่ง API
-    let rawUsed = context.tokens || 0;
+    // --- 2. Original Load (รวมทุกอย่าง: Chat, Card, Lore, Jailbreak) ---
+    // ดึงค่า context.tokens ที่ระบบนับรวมมาให้แล้ว
+    let originalLoad = context.tokens || 0;
     
-    // Fallback: ดึงจาก UI Bar ถ้าหาตัวแปรไม่เจอ
-    if (rawUsed === 0 && document.getElementById('token_count_bar')) {
+    // Fallback
+    if (originalLoad === 0 && document.getElementById('token_count_bar')) {
         const text = document.getElementById('token_count_bar').innerText;
         const match = text.match(/(\d+)/);
-        if (match) rawUsed = parseInt(match[1]);
+        if (match) originalLoad = parseInt(match[1]);
     }
 
     // --- 3. Savings (คำนวณส่วนต่าง HTML ที่เราจะตัดออก) ---
@@ -81,17 +81,18 @@ const calculateStats = () => {
         totalSaved += diff;
     });
 
-    // --- 4. Real Used (ใช้จริงหลังตัด) ---
-    const realUsed = Math.max(0, rawUsed - totalSaved);
+    // --- 4. Optimized Load (สิ่งที่ส่งให้โมเดลจริง) ---
+    // คือ ยอดรวมดิบ - ส่วนที่ประหยัดได้
+    const optimizedLoad = Math.max(0, originalLoad - totalSaved);
 
-    // --- 5. Free (คงเหลือ) ---
-    const freeTokens = Math.max(0, maxTokens - realUsed);
+    // --- 5. Remaining Space (พื้นที่เหลือ) ---
+    // คือ ขีดจำกัด - ยอดส่งจริง
+    const remainingSpace = Math.max(0, maxTokens - optimizedLoad);
 
     // --- 6. Memory Range ---
-    // (คำนวณคร่าวๆ ว่าด้วยยอด Real นี้ จำได้ถึงข้อความไหน)
-    // Base Tokens = RealUsed - (ผลรวมแชททั้งหมด)
+    // Base Tokens = OptimizedLoad - (ผลรวมแชททั้งหมด)
     const totalChatRealSum = chatRealSizes.reduce((sum, item) => sum + item.size, 0);
-    const baseTokens = Math.max(0, realUsed - totalChatRealSum);
+    const baseTokens = Math.max(0, optimizedLoad - totalChatRealSum);
     
     let currentLoad = baseTokens;
     let startMsgIndex = 0;
@@ -113,11 +114,12 @@ const calculateStats = () => {
     else memoryRangeText = `#${startMsgIndex} ➔ #${chat.length - 1}`;
 
     return {
-        raw: rawUsed,
-        real: realUsed,
-        free: freeTokens,
-        max: maxTokens,
-        memoryRange: memoryRangeText
+        memoryRange: memoryRangeText,
+        original: originalLoad,
+        optimized: optimizedLoad,
+        remaining: remainingSpace,
+        saved: totalSaved,
+        max: maxTokens
     };
 };
 
@@ -148,7 +150,7 @@ const injectStyles = () => {
         .control-zone { display: flex; gap: 10px; padding: 5px 10px; background: #220033; border-bottom: 1px solid #550077; font-size: 10px; color: #00E676; }
         
         .dashboard-zone { background: #000; padding: 12px; border-bottom: 1px solid #333; }
-        .dash-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; align-items: center; }
+        .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
         
         .progress-bg { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 5px; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, #00E676, #00C853); width: 0%; transition: width 0.5s; }
@@ -162,14 +164,13 @@ const injectStyles = () => {
         .msg-item { padding: 5px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #aaa; }
         .msg-item:hover { background: #330044; color: #fff; }
         
-        /* แก้ไข CSS ให้ข้อความไม่ล้น */
         #view-target-wrapper { margin-top:10px; border-top:1px solid #333; padding-top:10px; display:none; }
         .view-area { 
             background: #000; color: #00E676; padding: 8px; height: 120px; 
             overflow-y: auto; overflow-x: hidden;
             font-size: 10px; 
-            white-space: pre-wrap;      /* รักษารูปแบบบรรทัด */
-            word-wrap: break-word;      /* ตัดคำเมื่อสุดขอบ */
+            white-space: pre-wrap; 
+            word-wrap: break-word; 
             border: 1px solid #5c007a; border-radius: 4px; 
         }
         .stat-badge { display: flex; justify-content: space-between; margin-top: 5px; background: #222; padding: 5px; border-radius: 4px; }
@@ -199,7 +200,7 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    const percent = stats.max > 0 ? Math.min((stats.real / stats.max) * 100, 100) : 0;
+    const percent = stats.max > 0 ? Math.min((stats.optimized / stats.max) * 100, 100) : 0;
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -209,7 +210,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>GEMINI OPTIMIZER V38</span>
+            <span>CHRONOS V39 (Context Master)</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -219,32 +220,28 @@ const renderInspector = () => {
         </div>
 
         <div class="dashboard-zone">
-            <div class="dash-row">
-                <span style="color:#aaa;">🧠 Mem:</span>
+            <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 5px;">
+                <span style="color:#aaa;">🧠 Memory Range:</span>
                 <b style="color:#E040FB;">${stats.memoryRange}</b>
             </div>
             
-            <div class="dash-row">
-                <span style="color:#FF9800;">Raw (รวมโค้ด):</span>
-                <b style="color:#FF9800;">${stats.raw}</b>
-            </div>
-            
-            <div class="dash-row">
-                <span style="color:#00E676;">Real (ตัดแล้ว):</span>
-                <b style="color:#00E676;">${stats.real}</b>
+            <div class="dash-row" style="margin-top: 8px;">
+                <span style="color:#aaa;">🛡️ Tokens Saved:</span>
+                <b style="color:#00E676;">-${stats.saved}</b>
             </div>
 
-             <div class="dash-row" style="margin-top:5px; border-top:1px solid #333; padding-top:5px;">
-                <span style="color:#aaa;">Free (เหลือ):</span>
-                <b style="color:#fff;">${stats.free}</b>
+            <div class="dash-row" style="margin-top: 5px;">
+                <span style="color:#fff;">Remaining Space:</span>
+                <b style="color:#00E676;">${stats.remaining}</b>
             </div>
 
             <div class="progress-bg">
                 <div class="progress-fill" style="width: ${percent}%"></div>
             </div>
             
-            <div style="font-size:9px; color:#555; text-align:right; margin-top:2px;">
-                Total (Setting): ${stats.max}
+            <div style="display:flex; justify-content:space-between; margin-top: 5px; font-size: 10px; color:#777;">
+                <span>Original: ${stats.original}</span>
+                <span>Optimized: ${stats.optimized}</span>
             </div>
         </div>
 
@@ -254,7 +251,7 @@ const renderInspector = () => {
                 <button class="search-btn" onclick="searchById()">Check</button>
             </div>
             
-            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Recent (Click to view):</div>
+            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Recent:</div>
             <div class="msg-list">${listHtml}</div>
             
             <div id="view-target-wrapper">
@@ -332,9 +329,9 @@ window.viewAIVersion = (index) => {
         <div style="margin-bottom:3px; color:#D500F9;">ID: #${index}</div>
         <div class="view-area">${aiViewText}</div>
         <div class="stat-badge">
-            <span>Raw: <b>${rawTokens}</b></span>
-            <span style="color:#00E676;">Real: <b>${cleanTokens}</b></span>
-            <span style="color:#E040FB;">Save: <b>${saved > 0 ? saved : 0}</b></span>
+            <span>Original: <b>${rawTokens}</b></span>
+            <span style="color:#00E676;">Optimized: <b>${cleanTokens}</b></span>
+            <span style="color:#E040FB;">Saved: <b>${saved > 0 ? saved : 0}</b></span>
         </div>
     `;
 };
@@ -360,5 +357,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-                                                                                                                                    }
-            
+            }
+
