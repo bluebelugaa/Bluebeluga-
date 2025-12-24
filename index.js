@@ -1,43 +1,21 @@
-// index.js - Chronos V47 (Manual Edition) 💎🔧
-// Logic: Context King + Auto Refresh + MANUAL OVERRIDE
-// UX: Scroll Lock (Fixes jumping list during refresh)
-// UI: Neon Cyclone (V39 Style)
+// index.js - Chronos V60 (Neon Hybrid) 💎🌌
+// UI: Neon Cyclone (V47 Style) - The one you liked!
+// Logic: Smart Sync + DOM Reader
+// Feature: Manual Input for Max Context directly in the UI
 
-const extensionName = "Chronos_V47_Manual";
-
-// =================================================================
-// 🔥 โซนกำหนดค่าเอง (พิมพ์เลขที่ต้องการตรงนี้เลย!) 🔥
-// =================================================================
-const MANUAL_LIMIT = 0; // 👈 แก้เป็น 200000 หรือค่าที่คุณต้องการ
+const extensionName = "Chronos_V60_NeonHybrid";
 
 // =================================================================
 // 1. GLOBAL STATE
 // =================================================================
-let FINAL_PROMPT_TOKENS = 0;
-let LAST_PAYLOAD_TOKENS = 0;
+let userManualLimit = 0; // เก็บค่า Max ที่คุณกรอกเอง
 
 const getChronosTokenizer = () => {
     try {
         const ctx = SillyTavern.getContext();
         const model = ctx?.model || ctx?.settings?.model || SillyTavern?.settings?.model;
-        if (!model) return null;
-        return SillyTavern.Tokenizers.getTokenizerForModel(model);
-    } catch (e) {
-        return null;
-    }
-};
-
-// =================================================================
-// 2. HOOKS
-// =================================================================
-const chronosAfterPrompt = (data) => {
-    try {
-        const tokenizer = getChronosTokenizer();
-        if (tokenizer && data && typeof data.prompt === 'string') {
-            FINAL_PROMPT_TOKENS = tokenizer.encode(data.prompt).length;
-        }
-    } catch (e) {}
-    return data;
+        return model ? SillyTavern.Tokenizers.getTokenizerForModel(model) : null;
+    } catch (e) { return null; }
 };
 
 const stripHtmlToText = (html) => {
@@ -52,6 +30,9 @@ const stripHtmlToText = (html) => {
     return text;
 };
 
+// =================================================================
+// 2. PAYLOAD MODIFIER
+// =================================================================
 const optimizePayload = (data) => {
     const processText = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) {
@@ -59,143 +40,208 @@ const optimizePayload = (data) => {
         }
         return text;
     };
-
     if (data.body?.messages) {
-        data.body.messages.forEach(msg => {
-            msg.content = processText(msg.content);
-        });
+        data.body.messages.forEach(msg => msg.content = processText(msg.content));
     } else if (data.body?.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
-
-    try {
-        const tokenizer = getChronosTokenizer();
-        if (tokenizer) {
-            if (data.body?.messages && data.body.messages.length > 0) {
-                const lastMsg = data.body.messages[data.body.messages.length - 1];
-                LAST_PAYLOAD_TOKENS = tokenizer.encode(lastMsg.content).length;
-            } else if (typeof data.body?.prompt === 'string') {
-                LAST_PAYLOAD_TOKENS = tokenizer.encode(data.body.prompt).length;
-            }
-        }
-    } catch (e) {}
-
     setTimeout(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && ins.style.display === 'block') renderInspector();
-    }, 1000);
-    
+    }, 500);
     return data;
 };
 
 // =================================================================
-// 3. CALCULATOR (With Manual Override)
+// 3. CALCULATOR (Auto + Manual Override)
 // =================================================================
 const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, remaining: 0, saved: 0, max: 0 };
+    if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, saved: 0, max: 0 };
     
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
-
-    // --- Max Context Logic ---
-    let maxTokens = 8192;
-
-    // 🛑 1. CHECK MANUAL LIMIT FIRST (Priority #1)
-    if (typeof MANUAL_LIMIT !== 'undefined' && MANUAL_LIMIT > 0) {
-        maxTokens = MANUAL_LIMIT;
-    } 
-    else {
-        // 2. Fallback to Auto-detect if Manual is 0
-        const candidateValues = [];
-        ['max_context', 'max_tokens', 'cfg_ctx_size'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el && !isNaN(parseInt(el.value))) candidateValues.push(parseInt(el.value));
-        });
-        if (SillyTavern.main_api && SillyTavern.main_api.max_context) candidateValues.push(SillyTavern.main_api.max_context);
-        if (context.max_context) candidateValues.push(context.max_context);
-        const validValues = candidateValues.filter(v => typeof v === 'number' && v > 100);
-        if (validValues.length > 0) maxTokens = Math.max(...validValues);
-    }
-
-    // --- Load Logic ---
-    let currentLoad = 0;
-    let sourceLabel = "Waiting...";
-
-    if (context.tokens && context.tokens > 0) {
-        currentLoad = context.tokens;
-        sourceLabel = "ST Context (Live)";
-    } else if (FINAL_PROMPT_TOKENS > 0) {
-        currentLoad = FINAL_PROMPT_TOKENS;
-        sourceLabel = "Gen. Prompt (Cached)";
-    } else if (LAST_PAYLOAD_TOKENS > 0) {
-        currentLoad = LAST_PAYLOAD_TOKENS;
-        sourceLabel = "Payload Fallback";
-    }
-
-    // --- Savings Est. ---
-    let estimatedSavings = 0;
     const tokenizer = getChronosTokenizer();
-    const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 2.7);
+    const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 3);
 
+    // --- A. SAVINGS (HTML CUT) ---
+    let totalSavings = 0;
     chat.forEach((msg) => {
-        const rawLen = quickCount(msg.mes);
-        let cleanContent = msg.mes;
-        if (/<[^>]+>|&lt;[^&]+&gt;/.test(cleanContent)) {
-             const clean = stripHtmlToText(cleanContent);
-             cleanContent = `[System Content:\n${clean}]`;
+        const rawMsg = msg.mes || "";
+        if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
+            const rawLen = quickCount(rawMsg);
+            const cleanMsg = `[System Content:\n${stripHtmlToText(rawMsg)}]`;
+            const optLen = quickCount(cleanMsg);
+            totalSavings += Math.max(0, rawLen - optLen);
         }
-        const optLen = quickCount(cleanContent);
-        estimatedSavings += Math.max(0, rawLen - optLen);
     });
 
-    const optimizedLoad = currentLoad;
-    const originalLoad = currentLoad + estimatedSavings; 
-    const remainingSpace = Math.max(0, maxTokens - optimizedLoad);
-
-    // --- Memory Range ---
-    let memoryRangeText = "-";
-    const systemOverheadEstimate = Math.max(0, optimizedLoad - quickCount(chat.map(m=>m.mes).join(''))); 
-    const availableForChat = maxTokens - systemOverheadEstimate;
+    // --- B. BASE LOAD (Current Tokens) ---
+    // พยายามดึงจาก DOM (บาร์บนสุด) เพื่อความแม่นยำเทียบเท่าตาเห็น
+    let stTotalTokens = context.tokens || 0;
     
-    let currentFill = 0;
-    let startMsgIndex = -1;
-    let rememberedCount = 0;
-    
-    for (let i = chat.length - 1; i >= 0; i--) {
-        let msgToken = quickCount(chat[i].mes);
-        if (/<[^>]+>|&lt;[^&]+&gt;/.test(chat[i].mes)) {
-            const clean = stripHtmlToText(chat[i].mes);
-            msgToken = quickCount(`[System Content:\n${clean}]`);
+    // Fallback: Read DOM if ST returns 0
+    if (stTotalTokens === 0) {
+        const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
+        if (tokenCounterEl) {
+            const text = tokenCounterEl.innerText || "";
+            const parts = text.split('/');
+            if (parts.length > 0) {
+                const domCurrent = parseInt(parts[0].replace(/[^0-9]/g, ''));
+                if (!isNaN(domCurrent) && domCurrent > 0) stTotalTokens = domCurrent;
+            }
         }
-        if (currentFill + msgToken <= availableForChat) {
-            currentFill += msgToken;
-            startMsgIndex = i;
-            rememberedCount++;
+    }
+    // Final Fallback: Manual Count
+    if (stTotalTokens === 0 && chat.length > 0) {
+         let manualChat = 0;
+         chat.forEach(m => manualChat += quickCount(m.mes));
+         stTotalTokens = manualChat + 2000;
+    }
+
+    // --- C. MAX CONTEXT (Denominator) ---
+    let maxTokens = 8192;
+
+    // 1. PRIORITY: USER INPUT (ช่องกรอกเอง)
+    if (userManualLimit > 0) {
+        maxTokens = userManualLimit;
+    } 
+    // 2. AUTO-DETECT
+    else {
+        const isUnlocked = SillyTavern.settings?.unlock_context || SillyTavern.settings?.unlocked_context;
+        if (isUnlocked) {
+            if (SillyTavern.settings?.context_size > 8192) maxTokens = parseInt(SillyTavern.settings.context_size);
+            else maxTokens = 1000000; // Default Unlocked
         } else {
-            break; 
+            if (SillyTavern.settings?.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
+            else if (context.max_context) maxTokens = parseInt(context.max_context);
         }
+        // Auto-Expand if load > max
+        if (stTotalTokens > maxTokens) maxTokens = stTotalTokens;
     }
 
-    if (chat.length > 0) {
-        if (rememberedCount >= chat.length) memoryRangeText = `All (#0 - #${chat.length - 1})`;
-        else if (startMsgIndex !== -1) memoryRangeText = `#${startMsgIndex} ➔ #${chat.length - 1}`;
-        else memoryRangeText = "None (Context Full)";
-    }
+    const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
 
+    // Memory Label
+    let memoryRangeText = "Healthy";
+    const percent = maxTokens > 0 ? (finalOptimizedLoad / maxTokens) : 0;
+    if (percent > 1) memoryRangeText = "Overflow";
+    else if (percent > 0.9) memoryRangeText = "Critical";
+    else if (percent > 0.75) memoryRangeText = "Heavy";
+    
     return {
         memoryRange: memoryRangeText,
-        original: originalLoad,
-        optimized: optimizedLoad,
-        remaining: remainingSpace,
-        saved: estimatedSavings,
-        max: maxTokens,
-        source: sourceLabel
+        original: stTotalTokens,
+        optimized: finalOptimizedLoad, // ตัวเลขหน้า / (Load ที่ลดแล้ว)
+        saved: totalSavings,
+        max: maxTokens,                // ตัวเลขหลัง / (แก้ได้)
+        source: userManualLimit > 0 ? "Manual" : "Auto"
     };
 };
 
 // =================================================================
-// 4. UI SYSTEM (V39 Style) - With Scroll Fix
+// 4. UI RENDERER (V47 Style + Input Field)
 // =================================================================
+window.updateManualLimit = (val) => {
+    userManualLimit = parseInt(val);
+    renderInspector();
+};
+
+const renderInspector = () => {
+    const ins = document.getElementById('chronos-inspector');
+    if (!ins || ins.style.display === 'none') return;
+
+    // Scroll Lock
+    const msgListEl = ins.querySelector('.msg-list');
+    const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
+
+    const chat = SillyTavern.getContext().chat || [];
+    const stats = calculateStats();
+    
+    let percent = 0;
+    if (stats.max > 0) {
+        percent = (stats.optimized / stats.max) * 100;
+        if (percent > 100) percent = 100;
+    }
+
+    let listHtml = chat.slice(-5).reverse().map((msg, i) => {
+        const actualIdx = chat.length - 1 - i;
+        const preview = (msg.mes || "").substring(0, 25).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const roleIcon = msg.is_user ? '👤' : '🤖';
+        return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">
+                    <span style="color:#D500F9;">#${actualIdx}</span> ${roleIcon} ${preview}...
+                </div>`;
+    }).join('');
+
+    const fmt = (n) => n.toLocaleString();
+    const inputValue = userManualLimit > 0 ? userManualLimit : '';
+    const placeholder = stats.source === 'Auto' ? fmt(stats.max) : 'Auto';
+
+    // HTML Structure based on V47 Polished
+    ins.innerHTML = `
+        <div class="ins-header" id="panel-header">
+            <span>🚀 CHRONOS V60 (Neon Hybrid)</span>
+            <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
+        </div>
+        
+        <div class="control-zone">
+            <label style="cursor:pointer;"><input type="checkbox" onchange="toggleDrag('orb', this.checked)" ${dragConfig.orbUnlocked ? 'checked' : ''}> Move Orb</label>
+            <label style="cursor:pointer;"><input type="checkbox" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}> Move Win</label>
+        </div>
+
+        <div class="dashboard-zone">
+            <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
+                <span style="color:#aaa;">🧠 Status</span>
+                <span class="dash-val" style="color:#E040FB;">${stats.memoryRange}</span>
+            </div>
+            
+            <div class="dash-row">
+                <span style="color:#aaa;">🛡️ Tokens Saved (Est.)</span>
+                <span class="dash-val" style="color:#00E676;">-${fmt(stats.saved)} toks</span>
+            </div>
+
+            <div class="dash-row" style="align-items:center;">
+                <span style="color:#fff;">🔋 Load (${stats.source})</span>
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <span class="dash-val" style="color:#fff; font-size:13px;">${fmt(stats.optimized)} / </span>
+                    <input type="number" 
+                           value="${inputValue}" 
+                           placeholder="${placeholder}"
+                           onchange="updateManualLimit(this.value)"
+                           style="width: 75px; background: #222; border: 1px solid #444; color: #fff; border-radius: 3px; font-size: 11px; padding: 2px; text-align:right; font-family: 'Consolas', monospace;">
+                </div>
+            </div>
+
+            <div class="progress-container">
+                <div class="progress-bar" style="width: ${percent}%"></div>
+            </div>
+            
+            <div style="text-align:right; font-size:9px; color:#555; margin-top:3px;">
+                (Original ST: ${fmt(stats.original)})
+            </div>
+        </div>
+
+        <div class="ins-body">
+            <div style="display:flex; gap:5px; margin-bottom:10px;">
+                <input type="number" id="chronos-search-id" placeholder="Msg ID..." style="background:#222; border:1px solid #444; color:#fff; width:60px; padding:4px; border-radius:3px;">
+                <button onclick="searchById()" style="background:#D500F9; border:none; color:#000; padding:4px 10px; border-radius:3px; cursor:pointer; font-weight:bold;">INSPECT</button>
+            </div>
+            
+            <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase;">Recent Messages</div>
+            <div class="msg-list">${listHtml}</div>
+            <div id="view-target-wrapper"><div id="view-target-content"></div></div>
+        </div>
+    `;
+
+    // Restore Scroll
+    const newMsgListEl = ins.querySelector('.msg-list');
+    if (newMsgListEl) newMsgListEl.scrollTop = prevScrollTop;
+};
+
+// =================================================================
+// 5. STYLES (V47 Polished / V39 Neon)
+// =================================================================
+let dragConfig = { orbUnlocked: false, panelUnlocked: false };
+
 const injectStyles = () => {
     const style = document.createElement('style');
     style.innerHTML = `
@@ -252,109 +298,6 @@ const injectStyles = () => {
     document.head.appendChild(style);
 };
 
-let dragConfig = { orbUnlocked: false, panelUnlocked: false };
-
-const createUI = () => {
-    const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
-    const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
-
-    const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
-    const ins = document.createElement('div'); ins.id = 'chronos-inspector';
-    document.body.appendChild(orb); document.body.appendChild(ins);
-    
-    orb.onclick = (e) => {
-        if (orb.getAttribute('data-dragging') === 'true') return;
-        ins.style.display = (ins.style.display === 'none') ? 'block' : 'none';
-        if (ins.style.display === 'block') renderInspector();
-    };
-
-    makeDraggable(orb, 'orb'); makeDraggable(ins, 'panel');
-};
-
-const renderInspector = () => {
-    const ins = document.getElementById('chronos-inspector');
-    if (ins.style.display === 'none') return;
-
-    // --- 1. Remember Scroll Position ---
-    const msgListEl = ins.querySelector('.msg-list');
-    const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
-
-    const chat = SillyTavern.getContext().chat || [];
-    const stats = calculateStats();
-    
-    const percent = stats.max > 0 ? Math.min((stats.optimized / stats.max) * 100, 100) : 0;
-    
-    let listHtml = chat.slice(-5).reverse().map((msg, i) => {
-        const actualIdx = chat.length - 1 - i;
-        const preview = (msg.mes || "").substring(0, 25).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const roleIcon = msg.is_user ? '👤' : '🤖';
-        return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">
-                    <span style="color:#D500F9;">#${actualIdx}</span> ${roleIcon} ${preview}...
-                </div>`;
-    }).join('');
-
-    // Format numbers nicely
-    const fmt = (n) => n.toLocaleString();
-    const loadDisplay = MANUAL_LIMIT > 0 ? `(Manual)` : `(Auto)`;
-
-    ins.innerHTML = `
-        <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V47 (Manual)</span>
-            <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
-        </div>
-        
-        <div class="control-zone">
-            <label style="cursor:pointer;"><input type="checkbox" onchange="toggleDrag('orb', this.checked)" ${dragConfig.orbUnlocked ? 'checked' : ''}> Move Orb</label>
-            <label style="cursor:pointer;"><input type="checkbox" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}> Move Win</label>
-        </div>
-
-        <div class="dashboard-zone">
-            <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
-                <span style="color:#aaa;">🧠 Last Known Context</span>
-                <span class="dash-val" style="color:#E040FB;">${stats.memoryRange}</span>
-            </div>
-            
-            <div class="dash-row">
-                <span style="color:#aaa;">🛡️ Tokens Saved (Est.)</span>
-                <span class="dash-val" style="color:#00E676;">-${fmt(stats.saved)} toks</span>
-            </div>
-
-            <div class="dash-row">
-                <span style="color:#fff;">🔋 Load ${loadDisplay}</span>
-                <span class="dash-val" style="color:#fff;">${fmt(stats.optimized)} / ${fmt(stats.max)}</span>
-            </div>
-
-            <div class="progress-container">
-                <div class="progress-bar" style="width: ${percent}%"></div>
-            </div>
-            
-            <div style="text-align:right; font-size:9px; color:#555; margin-top:3px;">
-                Src: ${stats.source}
-            </div>
-        </div>
-
-        <div class="ins-body">
-            <div style="display:flex; gap:5px; margin-bottom:10px;">
-                <input type="number" id="chronos-search-id" placeholder="Msg ID..." style="background:#222; border:1px solid #444; color:#fff; width:60px; padding:4px; border-radius:3px;">
-                <button onclick="searchById()" style="background:#D500F9; border:none; color:#000; padding:4px 10px; border-radius:3px; cursor:pointer; font-weight:bold;">INSPECT</button>
-            </div>
-            
-            <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase;">Recent Messages</div>
-            <div class="msg-list">${listHtml}</div>
-            
-            <div id="view-target-wrapper">
-                <div id="view-target-content"></div>
-            </div>
-        </div>
-    `;
-
-    // --- 2. Restore Scroll Position ---
-    const newMsgListEl = ins.querySelector('.msg-list');
-    if (newMsgListEl) {
-        newMsgListEl.scrollTop = prevScrollTop;
-    }
-};
-
 // =================================================================
 // 6. UTILS
 // =================================================================
@@ -373,11 +316,9 @@ const makeDraggable = (elm, type) => {
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        
         const clientX = e.clientX || e.touches[0].clientX; 
         const clientY = e.clientY || e.touches[0].clientY;
         pos3 = clientX; pos4 = clientY;
-        
         document.onmouseup = dragEnd; document.onmousemove = dragAction;
         document.ontouchend = dragEnd; document.ontouchmove = dragAction;
         elm.setAttribute('data-dragging', 'true');
@@ -454,20 +395,16 @@ window.viewAIVersion = (index) => {
     setTimeout(createUI, 2000); 
 
     if (typeof SillyTavern !== 'undefined') {
-        console.log(`[${extensionName}] Ready. Live Monitoring + Scroll Fix.`);
-        
+        console.log(`[${extensionName}] Ready.`);
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
 
-        // 🔥 Auto-refresh loop
         setInterval(() => {
             const ins = document.getElementById('chronos-inspector');
             if (ins && ins.style.display === 'block') {
                 renderInspector();
             }
         }, 2000);
-
-    } else {
-        console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
+    
