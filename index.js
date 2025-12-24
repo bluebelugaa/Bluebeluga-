@@ -1,28 +1,41 @@
-// index.js - Chronos V34 (The Memory Master) 🧠🛡️
+// index.js - Chronos V35 (System Sync & Fix View) 🔗🛠️
 
-const extensionName = "Chronos_V34_MemoryMaster";
+const extensionName = "Chronos_V35_SystemSync";
+
+// เราเก็บ config ไว้เผื่อ fallback แต่หลักๆ จะใช้ของระบบ
+let config = {
+    fallbackThaiDivisor: 1.3,
+    fallbackEngDivisor: 3.5
+};
 
 // =================================================================
-// 1. Logic: Tokenizer Wrapper (เรียกใช้ของระบบ SillyTavern)
+// 1. Logic: Tokenizer (เรียกใช้ของ SillyTavern โดยตรง)
 // =================================================================
 const getSysTokenCount = (text) => {
     if (!text) return 0;
     try {
-        // เรียกใช้ Tokenizer ตัวเดียวกับหน้าจอแชท
+        // 1. พยายามเรียก Tokenizer ของ SillyTavern
         if (typeof SillyTavern !== 'undefined' && SillyTavern.Tokenizers && typeof SillyTavern.Tokenizers.encode === 'function') {
             return SillyTavern.Tokenizers.encode(text).length;
         }
-        // Fallback
+        // 2. Fallback ทั่วไป
         if (typeof GPTTokenizer_Encoding_Encode === 'function') {
             return GPTTokenizer_Encoding_Encode(text).length;
         }
-        return Math.round(text.length / 3); 
+        
+        // 3. ถ้าหาไม่เจอจริงๆ ค่อยใช้สูตรหาร (กันตาย)
+        const thaiChars = (text.match(/[\u0E00-\u0E7F]/g) || []).length;
+        const otherChars = text.length - thaiChars;
+        return Math.round(thaiChars / config.fallbackThaiDivisor) + Math.round(otherChars / config.fallbackEngDivisor);
+
     } catch (e) {
+        console.error("Tokenizer Error:", e);
         return 0;
     }
 };
 
 const stripHtmlToText = (html) => {
+    if (!html) return "";
     let text = html.replace(/<br\s*\/?>/gi, '\n')
                    .replace(/<\/p>/gi, '\n\n')
                    .replace(/<\/div>/gi, '\n')
@@ -34,75 +47,54 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. Logic: Calculator (Memory & Savings)
+// 2. Logic: Calculator (ดึงค่าจาก Context ระบบ)
 // =================================================================
-const calculateStats = () => {
-    if (typeof SillyTavern === 'undefined') return { memory: 0, totalMsgs: 0, saved: 0, usage: 0, max: 0 };
+const calculateSystemStats = () => {
+    if (typeof SillyTavern === 'undefined') return { used: 0, max: 0, saved: 0 };
     
     const context = SillyTavern.getContext();
-    const chat = context.chat || [];
-    const maxTokens = context.max_context || 8192;
     
-    // 1. หา Base Token (ของที่ลบไม่ได้) โดยการหักลบ
-    // เราเริ่มจากยอดรวมดิบ (Raw) ที่ระบบบอก
-    let systemRawTotal = context.tokens || 0;
-    if (systemRawTotal === 0 && document.getElementById('token_count_bar')) {
+    // 1. ดึง Max Context จากการตั้งค่า SillyTavern โดยตรง
+    const maxTokens = context.max_context || 2048; // ถ้าหาไม่เจอใช้ค่า default ต่ำๆ
+    
+    // 2. ดึง Current Tokens ที่ SillyTavern นับไว้แล้ว (รวมทุกอย่าง)
+    let currentUsed = context.tokens || 0;
+    
+    // ถ้าหาใน context ไม่เจอ ให้พยายามดึงจาก UI Bar
+    if (currentUsed === 0 && document.getElementById('token_count_bar')) {
         const text = document.getElementById('token_count_bar').innerText;
         const match = text.match(/(\d+)/);
-        if (match) systemRawTotal = parseInt(match[1]);
+        if (match) currentUsed = parseInt(match[1]);
     }
 
-    // 2. คำนวณส่วนต่าง (Savings) และ Real Usage
+    // 3. คำนวณยอดที่ Extension ช่วยประหยัด (Saved)
+    // โดยการวนลูปเช็คว่า HTML หายไปกี่ Token
     let totalSaved = 0;
-    let chatRealTokens = []; // เก็บขนาดจริงของแต่ละข้อความไว้คำนวณ Memory
+    const chat = context.chat || [];
 
     chat.forEach(msg => {
-        const rawLen = getSysTokenCount(msg.mes) + 5; // +5 metadata
-        
-        let cleanContent = msg.mes;
-        if (cleanContent.includes('<') && cleanContent.includes('>')) {
-            const clean = stripHtmlToText(cleanContent);
-            cleanContent = `[System Content:\n${clean}]`;
+        if (msg.mes && msg.mes.includes('<') && msg.mes.includes('>')) {
+            const rawCount = getSysTokenCount(msg.mes);
+            
+            const cleanText = stripHtmlToText(msg.mes);
+            const finalContent = `[System Content:\n${cleanText}]`;
+            const realCount = getSysTokenCount(finalContent);
+            
+            const diff = Math.max(0, rawCount - realCount);
+            totalSaved += diff;
         }
-        const realLen = getSysTokenCount(cleanContent) + 5;
-        
-        const diff = Math.max(0, rawLen - realLen);
-        totalSaved += diff;
-        
-        chatRealTokens.push(realLen);
     });
 
-    const realUsage = systemRawTotal - totalSaved;
-
-    // 3. คำนวณ Memory Depth (จำได้กี่ข้อความ)
-    // ประมาณการ Base Token = RealUsage - ผลรวมของ Chat จริง
-    const totalChatReal = chatRealTokens.reduce((a, b) => a + b, 0);
-    const estimatedBase = Math.max(0, realUsage - totalChatReal);
-
-    let currentLoad = estimatedBase;
-    let rememberedCount = 0;
-
-    // วนลูปจาก "ล่าสุด" ย้อนกลับไป "อดีต"
-    for (let i = chatRealTokens.length - 1; i >= 0; i--) {
-        if (currentLoad + chatRealTokens[i] < maxTokens) {
-            currentLoad += chatRealTokens[i];
-            rememberedCount++;
-        } else {
-            break; // เต็มแล้ว จำข้อความเก่ากว่านี้ไม่ได้
-        }
-    }
-
     return {
-        memory: rememberedCount,
-        totalMsgs: chat.length,
-        saved: totalSaved,
-        usage: realUsage,
-        max: maxTokens
+        used: currentUsed,  // ยอดที่ Silly เห็น (Raw)
+        real: currentUsed - totalSaved, // ยอดจริงที่จะส่ง (Real)
+        max: maxTokens,     // ขีดจำกัดที่ตั้งไว้
+        saved: totalSaved   // ยอดที่ประหยัดได้
     };
 };
 
 // =================================================================
-// UI
+// 3. UI System
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
@@ -118,7 +110,7 @@ const injectStyles = () => {
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
         #chronos-inspector {
-            position: fixed; top: 80px; right: 70px; width: 300px; 
+            position: fixed; top: 80px; right: 70px; width: 320px; 
             background: rgba(15, 0, 20, 0.98); border: 2px solid #D500F9;
             color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 11px;
             display: none; z-index: 999999; border-radius: 12px;
@@ -128,8 +120,10 @@ const injectStyles = () => {
         .control-zone { display: flex; gap: 10px; padding: 5px 10px; background: #220033; border-bottom: 1px solid #550077; font-size: 10px; color: #00E676; }
         
         .dashboard-zone { background: #000; padding: 10px; border-bottom: 1px solid #333; }
-        .dash-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
-        
+        .dash-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+        .progress-bg { width: 100%; height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin-top: 5px; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #00E676, #00C853); width: 0%; transition: width 0.5s; }
+
         .ins-body { padding: 10px; }
         .search-row { display: flex; gap: 5px; margin-bottom: 10px; }
         .search-input { background: #222; border: 1px solid #D500F9; color: #fff; padding: 3px; width: 50px; border-radius: 3px; }
@@ -139,8 +133,8 @@ const injectStyles = () => {
         .msg-item { padding: 5px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #aaa; }
         .msg-item:hover { background: #330044; color: #fff; }
         
-        /* กล่องส่องข้อความที่หายไป กลับมาแล้ว */
-        #view-target { margin-top: 10px; border-top: 1px solid #333; padding-top: 10px; }
+        /* แก้ไข CSS ส่วน View ให้แสดงผลชัดเจน */
+        #view-target-wrapper { margin-top:10px; border-top:1px solid #333; padding-top:10px; display:none; }
         .view-area { background: #000; color: #00E676; padding: 8px; height: 120px; overflow-y: auto; font-size: 10px; white-space: pre-wrap; border: 1px solid #5c007a; border-radius: 4px; }
         .stat-badge { display: flex; justify-content: space-between; margin-top: 5px; background: #222; padding: 5px; border-radius: 4px; }
     `;
@@ -167,17 +161,21 @@ const createUI = () => {
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     const chat = SillyTavern.getContext().chat || [];
-    const stats = calculateStats();
+    const stats = calculateSystemStats();
+    
+    const percent = stats.max > 0 ? Math.min((stats.real / stats.max) * 100, 100) : 0;
 
+    // สร้างลิสต์ข้อความ (แก้ไข onclick ให้ส่ง index ที่ถูกต้อง)
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
-        const preview = msg.mes.substring(0, 20).replace(/</g, '&lt;');
+        // Escape HTML tags ใน preview เพื่อไม่ให้พัง
+        const preview = (msg.mes || "").substring(0, 20).replace(/</g, '&lt;').replace(/>/g, '&gt;');
         return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">#${actualIdx} ${msg.is_user ? '👤' : '🤖'} ${preview}...</div>`;
     }).join('');
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🧠 MEMORY MASTER V34</span>
+            <span>🔗 SYSTEM SYNC V35</span>
             <span style="cursor:pointer;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -188,17 +186,23 @@ const renderInspector = () => {
 
         <div class="dashboard-zone">
             <div class="dash-row">
-                <span style="color:#aaa;">🧠 จำได้ (Memory):</span>
-                <b style="color:#E040FB;">${stats.memory} / ${stats.totalMsgs} ข้อความ</b>
+                <span style="color:#aaa;">Context (Setting):</span>
+                <span style="color:#E040FB;">${stats.max} Tok</span>
             </div>
             
             <div class="dash-row">
-                <span style="color:#aaa;">🛡️ ประหยัดรวม (Saved):</span>
-                <b style="color:#00E676;">-${stats.saved} Tokens</b>
+                <span style="color:#FF9800;">🟠 Silly Sees:</span>
+                <b style="color:#FF9800;">${stats.used}</b>
             </div>
+            
+            <div class="dash-row">
+                <span style="color:#00E676;">🟢 Real Send:</span>
+                <b style="color:#00E676;">${stats.real}</b>
+            </div>
+            <div style="font-size:9px; color:#777; text-align:right;">(Saved: ${stats.saved})</div>
 
-            <div class="dash-row" style="margin-top:8px; font-size:10px; color:#555;">
-                <span>Usage: ${stats.usage} / ${stats.max}</span>
+            <div class="progress-bg">
+                <div class="progress-fill" style="width: ${percent}%"></div>
             </div>
         </div>
 
@@ -208,18 +212,17 @@ const renderInspector = () => {
                 <button class="search-btn" onclick="searchById()">Check</button>
             </div>
             
-            <div style="font-size:9px; color:#aaa; margin-bottom:3px;">ล่าสุด 5 ข้อความ:</div>
+            <div style="font-size:9px; color:#aaa; margin-bottom:2px;">Last 5 Messages:</div>
             <div class="msg-list">${listHtml}</div>
             
-            <div id="view-target">
-                <div style="color:#555; text-align:center; padding:20px; border:1px dashed #333; margin-top:5px;">
-                    คลิกข้อความด้านบน<br>เพื่อดูรายละเอียด
-                </div>
+            <div id="view-target-wrapper">
+                <div id="view-target-content"></div>
             </div>
         </div>
     `;
 };
 
+// ฟังก์ชันลาก (คงเดิม)
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
     if (type === 'panel') {
@@ -254,28 +257,45 @@ const makeDraggable = (elm, type) => {
     elm.onmousedown = dragStart; elm.ontouchstart = dragStart;
 };
 
+// =================================================================
+// 4. View Logic (แก้ไขใหม่ให้ทำงานได้แน่นอน)
+// =================================================================
 window.searchById = () => {
-    const id = parseInt(document.getElementById('chronos-search-id').value);
+    const idInput = document.getElementById('chronos-search-id');
+    const id = parseInt(idInput.value);
     const chat = SillyTavern.getContext().chat || [];
     if (isNaN(id) || id < 0 || id >= chat.length) { alert("Invalid ID"); return; }
     viewAIVersion(id);
 };
 
 window.viewAIVersion = (index) => {
-    const chat = SillyTavern.getContext().chat;
-    const msg = chat[index].mes;
-    
-    // ใช้ Tokenizer ของระบบ นับแบบเป๊ะๆ
-    const rawTokens = getSysTokenCount(msg.mes); 
+    // ต้องดึง Context ใหม่ทุกครั้ง เพื่อให้ได้ข้อมูลล่าสุด
+    const context = SillyTavern.getContext();
+    const chat = context.chat || [];
+    const msg = chat[index];
+
+    if (!msg) {
+        alert("ไม่พบข้อความ");
+        return;
+    }
+
+    // เปิด wrapper
+    const wrapper = document.getElementById('view-target-wrapper');
+    if (wrapper) wrapper.style.display = 'block';
+
+    const contentDiv = document.getElementById('view-target-content');
+    if (!contentDiv) return;
+
+    // คำนวณสด
+    const rawTokens = getSysTokenCount(msg.mes);
     
     const cleanText = stripHtmlToText(msg.mes);
     const aiViewText = `[System Content:\n${cleanText}]`;
-    const cleanTokens = getSysTokenCount(aiViewText); 
-    
+    const cleanTokens = getSysTokenCount(aiViewText);
     const saved = rawTokens - cleanTokens;
 
-    document.getElementById('view-target').innerHTML = `
-        <div style="margin-bottom:3px; color:#D500F9;">ข้อความ ID: #${index}</div>
+    contentDiv.innerHTML = `
+        <div style="margin-bottom:3px; color:#D500F9;">ID: #${index}</div>
         <div class="view-area">${aiViewText}</div>
         <div class="stat-badge">
             <span>Raw: <b>${rawTokens}</b></span>
@@ -285,6 +305,9 @@ window.viewAIVersion = (index) => {
     `;
 };
 
+// =================================================================
+// 5. Execution Hook (ตัวตัดจริง)
+// =================================================================
 const optimizePayload = (data) => {
     const process = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) return `[System Content:\n${stripHtmlToText(text)}]`;
@@ -292,6 +315,13 @@ const optimizePayload = (data) => {
     };
     if (data.body && data.body.messages) data.body.messages.forEach(msg => msg.content = process(msg.content));
     else if (data.body && data.body.prompt) data.body.prompt = process(data.body.prompt);
+    
+    // อัปเดตหน้าจอ Inspector (ถ้าเปิดอยู่) หลังส่งข้อความ
+    setTimeout(() => {
+        const ins = document.getElementById('chronos-inspector');
+        if (ins && ins.style.display === 'block') renderInspector();
+    }, 1000);
+    
     return data;
 };
 
@@ -300,5 +330,5 @@ setTimeout(createUI, 1500);
 if (typeof SillyTavern !== 'undefined') {
     SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
     SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-}
+                                                    }
 
