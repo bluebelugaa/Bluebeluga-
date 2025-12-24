@@ -1,5 +1,5 @@
 // index.js - Chronos V39 (Context Master) 🌌📏
-// Full Version: Corrected Token Logic + Cyberpunk UI
+// Full Version: Cyberpunk UI + Fixed Token Logic + Max Slider Patch
 
 const extensionName = "Chronos_V39_ContextMaster";
 
@@ -17,32 +17,27 @@ const getSysTokenCount = (text) => {
         if (typeof GPTTokenizer_Encoding_Encode === 'function') {
             return GPTTokenizer_Encoding_Encode(text).length;
         }
-        // 3. Last Resort: Estimated (Thai/English mix ~2.7 chars/token)
+        // 3. Last Resort: Estimated
         return Math.round(text.length / 2.7); 
     } catch (e) {
-        console.warn("Chronos Tokenizer Error:", e);
         return Math.round(text.length / 3);
     }
 };
 
 const stripHtmlToText = (html) => {
     if (!html) return "";
-    // แปลง Tag สำคัญเป็น Newline ก่อนลบ
     let text = html.replace(/<br\s*\/?>/gi, '\n')
                    .replace(/<\/p>/gi, '\n\n')
                    .replace(/<\/div>/gi, '\n')
                    .replace(/<\/h[1-6]>/gi, '\n');
-    // ลบ Tags ทั้งหมด
     text = text.replace(/<[^>]+>/g, ''); 
-    // ลบ Entities
     text = text.replace(/&lt;[^&]+&gt;/g, ''); 
-    // จัดระเบียบ Newline ไม่ให้เยอะเกินไป
     text = text.replace(/\n\s*\n/g, '\n\n').trim();
     return text;
 };
 
 // =================================================================
-// 2. CORE LOGIC: Calculator (Fixed Reverse Engineering)
+// 2. CORE LOGIC: Calculator (Fixed Max & Overhead)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "N/A", original: 0, optimized: 0, remaining: 0, saved: 0, max: 0 };
@@ -50,20 +45,26 @@ const calculateStats = () => {
     const context = SillyTavern.getContext();
     const chat = context.chat || [];
 
-    // --- 1. Get Max Context Limit ---
+    // --- 1. Max Context (Auto-Detect Logic - FIXED) ---
     let maxTokens = 0;
-    const maxInput = document.getElementById('max_context');
-    if (maxInput) {
-        maxTokens = parseInt(maxInput.value);
-    } else {
-        maxTokens = context.max_context || 8192;
+    const potentialIds = ['max_context', 'max_tokens', 'cfg_ctx_size'];
+    
+    // เช็คทุก Slider ที่เป็นไปได้ และต้องไม่ถูกซ่อน (offsetParent != null)
+    for (const id of potentialIds) {
+        const el = document.getElementById(id);
+        if (el && el.offsetParent !== null && !isNaN(parseInt(el.value))) {
+            maxTokens = parseInt(el.value);
+            break; 
+        }
     }
 
-    // --- 2. Get Real Original Total (From ST System) ---
-    // ค่านี้คือความจริงที่สุดที่ ST ส่งให้เรา (รวม System + Card + Chat + Jailbreak)
+    // Fallback ถ้าหาใน UI ไม่เจอ
+    if (!maxTokens || maxTokens === 0) {
+        maxTokens = context.max_context || context.max_tokens || 8192;
+    }
+
+    // --- 2. Original Total Load ---
     let originalTotalLoad = context.tokens || 0;
-    
-    // Fallback: ดึงจาก UI ถ้า context.tokens ยังไม่ update
     if (originalTotalLoad === 0 && document.getElementById('token_count_bar')) {
         const text = document.getElementById('token_count_bar').innerText;
         const match = text.match(/(\d+)/);
@@ -75,50 +76,42 @@ const calculateStats = () => {
     let sumOptimizedChatTokens = 0;
     let totalSaved = 0;
     let chatDetails = [];
-    
-    // ค่า Overhead ต่อข้อความ (Role definitions ฯลฯ)
     const MSG_OVERHEAD = 3; 
 
     chat.forEach((msg, index) => {
-        // A. Original Calculation
+        // Original
         const rawLen = getSysTokenCount(msg.mes) + MSG_OVERHEAD;
         sumOriginalChatTokens += rawLen;
 
-        // B. Optimized Calculation (Simulate Stripping)
+        // Optimized
         let cleanContent = msg.mes;
-        // เช็คว่ามี HTML ให้ตัดไหม ถ้ามีให้จำลอง format ใหม่
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(cleanContent)) {
              const clean = stripHtmlToText(cleanContent);
-             cleanContent = `[System Content:\n${clean}]`; // Format เดียวกับที่ส่งจริง
+             cleanContent = `[System Content:\n${clean}]`;
         }
         const optLen = getSysTokenCount(cleanContent) + MSG_OVERHEAD;
         sumOptimizedChatTokens += optLen;
 
-        // C. Calculate Diff
+        // Diff
         const diff = Math.max(0, rawLen - optLen);
         totalSaved += diff;
 
         chatDetails.push({ index: index, optimizedSize: optLen });
     });
 
-    // --- 4. Find Static Overhead (The Key Fix) ---
-    // System Overhead = ยอดรวมทั้งหมด(จาก ST) - ยอดแชททั้งหมด(ที่เรานับเอง)
-    // ค่านี้คือพวก Card, World Info, Author Note ที่เราแตะต้องไม่ได้
+    // --- 4. Final Calculation ---
+    // System Overhead = Total (ST) - Chat (Raw Sum)
     let staticOverhead = Math.max(0, originalTotalLoad - sumOriginalChatTokens);
-
-    // --- 5. Calculate Final Stats ---
+    
     const optimizedLoad = staticOverhead + sumOptimizedChatTokens;
     const remainingSpace = Math.max(0, maxTokens - optimizedLoad);
 
-    // --- 6. Determine Memory Range ---
-    // พื้นที่สำหรับแชท = Max - Static Overhead
+    // --- 5. Memory Range ---
     const availableForChat = maxTokens - staticOverhead;
-    
     let currentFill = 0;
     let startMsgIndex = -1;
     let rememberedCount = 0;
 
-    // Loop ย้อนกลับ (ล่าสุด -> อดีต) เพื่อดูว่าจะยัดได้กี่ข้อความ
     for (let i = chatDetails.length - 1; i >= 0; i--) {
         const msgSize = chatDetails[i].optimizedSize;
         if (currentFill + msgSize <= availableForChat) {
@@ -126,11 +119,10 @@ const calculateStats = () => {
             startMsgIndex = chatDetails[i].index;
             rememberedCount++;
         } else {
-            break; // พื้นที่หมด
+            break;
         }
     }
 
-    // Format Text Display
     let memoryRangeText = "";
     if (chat.length === 0) memoryRangeText = "-";
     else if (rememberedCount >= chat.length) memoryRangeText = `All (#0 - #${chat.length - 1})`;
@@ -148,7 +140,7 @@ const calculateStats = () => {
 };
 
 // =================================================================
-// 3. UI SYSTEM: Styles & Elements
+// 3. UI SYSTEM: Styles (Neon Cyberpunk)
 // =================================================================
 const injectStyles = () => {
     const style = document.createElement('style');
@@ -201,12 +193,10 @@ const injectStyles = () => {
 
         .ins-body { padding: 10px; background: #111; max-height: 400px; overflow-y: auto;}
         
-        /* Message List */
         .msg-list { max-height: 120px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #0a0a0a; border-radius: 4px; }
         .msg-item { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; transition: 0.2s;}
         .msg-item:hover { background: #330044; color: #fff; padding-left: 10px;}
 
-        /* Viewer */
         #view-target-wrapper { margin-top:10px; border-top:1px dashed #444; padding-top:10px; display:none; animation: fade-in 0.3s; }
         .view-area { 
             background: #080808; color: #00E676; padding: 10px; height: 140px; 
@@ -220,7 +210,6 @@ const injectStyles = () => {
             background: #222; padding: 6px; border-radius: 4px; border: 1px solid #333;
         }
 
-        /* Scrollbar */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #111; }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
@@ -234,16 +223,13 @@ const injectStyles = () => {
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
 const createUI = () => {
-    // Remove old instances
     const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
 
-    // Create Elements
     const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '⚡';
     const ins = document.createElement('div'); ins.id = 'chronos-inspector';
     document.body.appendChild(orb); document.body.appendChild(ins);
     
-    // Orb Interaction
     orb.onclick = (e) => {
         if (orb.getAttribute('data-dragging') === 'true') return;
         ins.style.display = (ins.style.display === 'none') ? 'block' : 'none';
@@ -261,10 +247,8 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    // Calculate Usage Percentage
     const percent = stats.max > 0 ? Math.min((stats.optimized / stats.max) * 100, 100) : 0;
     
-    // Generate Recent Chat List
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
         const preview = (msg.mes || "").substring(0, 25).replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -292,7 +276,7 @@ const renderInspector = () => {
             </div>
             
             <div class="dash-row">
-                <span style="color:#aaa;">🗑️ Stripped HTML</span>
+                <span style="color:#aaa;">🛡️ Tokens Saved</span>
                 <span class="dash-val" style="color:#00E676;">-${stats.saved} toks</span>
             </div>
 
@@ -325,7 +309,7 @@ const renderInspector = () => {
 };
 
 // =================================================================
-// 4. INTERACTION: Drag & View
+// 4. INTERACTION & HOOKS
 // =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
@@ -341,7 +325,6 @@ const makeDraggable = (elm, type) => {
     const dragStart = (e) => {
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
-        // Panel drag only on header
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
         
         const clientX = e.clientX || e.touches[0].clientX; 
@@ -381,7 +364,6 @@ window.viewAIVersion = (index) => {
     const context = SillyTavern.getContext(); 
     const chat = context.chat || [];
     const msg = chat[index];
-
     if (!msg) return;
 
     const wrapper = document.getElementById('view-target-wrapper');
@@ -390,13 +372,10 @@ window.viewAIVersion = (index) => {
     const contentDiv = document.getElementById('view-target-content');
     if (!contentDiv) return;
 
-    // Calc specific stats
     const rawTokens = getSysTokenCount(msg.mes);
-    
     let cleanText = stripHtmlToText(msg.mes);
-    let aiViewText = msg.mes; // Default if no HTML
+    let aiViewText = msg.mes; 
     
-    // Check if stripping is needed
     if (/<[^>]+>|&lt;[^&]+&gt;/.test(msg.mes)) {
         aiViewText = `[System Content:\n${cleanText}]`;
     }
@@ -417,47 +396,32 @@ window.viewAIVersion = (index) => {
     `;
 };
 
-// =================================================================
-// 5. HOOKS: Request Interception
-// =================================================================
 const optimizePayload = (data) => {
-    // ฟังก์ชันย่อยสำหรับประมวลผล Text
     const processText = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) {
-            // ตัด HTML และห่อด้วย System Content เพื่อบอกโมเดล
             return `[System Content:\n${stripHtmlToText(text)}]`;
         }
         return text;
     };
-
-    // 1. จัดการ Messages list (Chat Completion)
     if (data.body && data.body.messages) {
-        data.body.messages.forEach(msg => {
-            msg.content = processText(msg.content);
-        });
-    }
-    // 2. จัดการ Prompt String (Text Completion)
-    else if (data.body && data.body.prompt) {
+        data.body.messages.forEach(msg => { msg.content = processText(msg.content); });
+    } else if (data.body && data.body.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
-    
-    // Refresh UI after sending
     setTimeout(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && ins.style.display === 'block') renderInspector();
     }, 1000);
-    
     return data;
 };
 
 // =================================================================
-// 6. INITIALIZATION
+// 5. INITIALIZATION
 // =================================================================
 (function() {
     injectStyles();
-    setTimeout(createUI, 2000); // รอให้ ST โหลดเสร็จก่อน
+    setTimeout(createUI, 2000); 
 
-    // Register Hook
     if (typeof SillyTavern !== 'undefined') {
         console.log(`[${extensionName}] Hooks registered.`);
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
@@ -466,4 +430,4 @@ const optimizePayload = (data) => {
         console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
-        
+    
