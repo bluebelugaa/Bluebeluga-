@@ -1,14 +1,13 @@
-// index.js - Chronos V60 (Neon Hybrid) 💎🌌
-// UI: Neon Cyclone (V47 Style) - The one you liked!
-// Logic: Smart Sync + DOM Reader
-// Feature: Manual Input for Max Context directly in the UI
+// index.js - Chronos V60 (Perfect Fusion) 💎⚡
+// Logic: V59 Smart Sync (Reads real ST load) + Manual Max Input
+// UI: V47 Neon Style (As requested) + Scroll Fix
 
-const extensionName = "Chronos_V60_NeonHybrid";
+const extensionName = "Chronos_V60_Fusion";
 
 // =================================================================
 // 1. GLOBAL STATE
 // =================================================================
-let userManualLimit = 0; // เก็บค่า Max ที่คุณกรอกเอง
+let userManualLimit = 0; // เก็บค่าที่คุณกรอกเอง
 
 const getChronosTokenizer = () => {
     try {
@@ -31,7 +30,7 @@ const stripHtmlToText = (html) => {
 };
 
 // =================================================================
-// 2. PAYLOAD MODIFIER
+// 2. HOOKS
 // =================================================================
 const optimizePayload = (data) => {
     const processText = (text) => {
@@ -53,7 +52,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Auto + Manual Override)
+// 3. CALCULATOR (V59 Logic: Accurate Load + Manual Max)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Syncing...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -63,7 +62,7 @@ const calculateStats = () => {
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 3);
 
-    // --- A. SAVINGS (HTML CUT) ---
+    // --- A. SAVINGS ---
     let totalSavings = 0;
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
@@ -75,8 +74,7 @@ const calculateStats = () => {
         }
     });
 
-    // --- B. BASE LOAD (Current Tokens) ---
-    // พยายามดึงจาก DOM (บาร์บนสุด) เพื่อความแม่นยำเทียบเท่าตาเห็น
+    // --- B. BASE LOAD (Logic "อันหน้า" ที่แม่นยำจาก V59) ---
     let stTotalTokens = context.tokens || 0;
     
     // Fallback: Read DOM if ST returns 0
@@ -91,31 +89,28 @@ const calculateStats = () => {
             }
         }
     }
-    // Final Fallback: Manual Count
+    // Final Fallback
     if (stTotalTokens === 0 && chat.length > 0) {
          let manualChat = 0;
          chat.forEach(m => manualChat += quickCount(m.mes));
          stTotalTokens = manualChat + 2000;
     }
 
-    // --- C. MAX CONTEXT (Denominator) ---
+    // --- C. MAX CONTEXT (Manual Input Priority) ---
     let maxTokens = 8192;
 
-    // 1. PRIORITY: USER INPUT (ช่องกรอกเอง)
     if (userManualLimit > 0) {
-        maxTokens = userManualLimit;
-    } 
-    // 2. AUTO-DETECT
-    else {
+        maxTokens = userManualLimit; // ใช้ค่าที่คุณกรอกเอง
+    } else {
+        // Auto logic (V58/59)
         const isUnlocked = SillyTavern.settings?.unlock_context || SillyTavern.settings?.unlocked_context;
         if (isUnlocked) {
             if (SillyTavern.settings?.context_size > 8192) maxTokens = parseInt(SillyTavern.settings.context_size);
-            else maxTokens = 1000000; // Default Unlocked
+            else maxTokens = 1000000;
         } else {
             if (SillyTavern.settings?.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
             else if (context.max_context) maxTokens = parseInt(context.max_context);
         }
-        // Auto-Expand if load > max
         if (stTotalTokens > maxTokens) maxTokens = stTotalTokens;
     }
 
@@ -127,13 +122,13 @@ const calculateStats = () => {
     if (percent > 1) memoryRangeText = "Overflow";
     else if (percent > 0.9) memoryRangeText = "Critical";
     else if (percent > 0.75) memoryRangeText = "Heavy";
-    
+
     return {
         memoryRange: memoryRangeText,
         original: stTotalTokens,
-        optimized: finalOptimizedLoad, // ตัวเลขหน้า / (Load ที่ลดแล้ว)
+        optimized: finalOptimizedLoad,
         saved: totalSavings,
-        max: maxTokens,                // ตัวเลขหลัง / (แก้ได้)
+        max: maxTokens,
         source: userManualLimit > 0 ? "Manual" : "Auto"
     };
 };
@@ -150,7 +145,7 @@ const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
-    // Scroll Lock
+    // Scroll Fix (จาก V47)
     const msgListEl = ins.querySelector('.msg-list');
     const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
 
@@ -176,10 +171,10 @@ const renderInspector = () => {
     const inputValue = userManualLimit > 0 ? userManualLimit : '';
     const placeholder = stats.source === 'Auto' ? fmt(stats.max) : 'Auto';
 
-    // HTML Structure based on V47 Polished
+    // UI Layout (V47 Style)
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V60 (Neon Hybrid)</span>
+            <span>🚀 CHRONOS V60 (Fusion)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -200,14 +195,14 @@ const renderInspector = () => {
             </div>
 
             <div class="dash-row" style="align-items:center;">
-                <span style="color:#fff;">🔋 Load (${stats.source})</span>
+                <span style="color:#fff;">🔋 Load (Real)</span>
                 <div style="display:flex; align-items:center; gap:5px;">
-                    <span class="dash-val" style="color:#fff; font-size:13px;">${fmt(stats.optimized)} / </span>
+                    <span class="dash-val" style="color:#fff;">${fmt(stats.optimized)} / </span>
                     <input type="number" 
                            value="${inputValue}" 
                            placeholder="${placeholder}"
                            onchange="updateManualLimit(this.value)"
-                           style="width: 75px; background: #222; border: 1px solid #444; color: #fff; border-radius: 3px; font-size: 11px; padding: 2px; text-align:right; font-family: 'Consolas', monospace;">
+                           style="width: 70px; background: #222; border: 1px solid #444; color: #fff; border-radius: 3px; font-size: 11px; padding: 2px; text-align:right;">
                 </div>
             </div>
 
@@ -216,7 +211,7 @@ const renderInspector = () => {
             </div>
             
             <div style="text-align:right; font-size:9px; color:#555; margin-top:3px;">
-                (Original ST: ${fmt(stats.original)})
+                Original ST: ${fmt(stats.original)}
             </div>
         </div>
 
@@ -232,13 +227,15 @@ const renderInspector = () => {
         </div>
     `;
 
-    // Restore Scroll
+    // Restore Scroll (จาก V47)
     const newMsgListEl = ins.querySelector('.msg-list');
-    if (newMsgListEl) newMsgListEl.scrollTop = prevScrollTop;
+    if (newMsgListEl) {
+        newMsgListEl.scrollTop = prevScrollTop;
+    }
 };
 
 // =================================================================
-// 5. STYLES (V47 Polished / V39 Neon)
+// 5. STYLES (V47 Style Exactly)
 // =================================================================
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
@@ -298,9 +295,6 @@ const injectStyles = () => {
     document.head.appendChild(style);
 };
 
-// =================================================================
-// 6. UTILS
-// =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
     if (type === 'panel') {
@@ -316,9 +310,11 @@ const makeDraggable = (elm, type) => {
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
+        
         const clientX = e.clientX || e.touches[0].clientX; 
         const clientY = e.clientY || e.touches[0].clientY;
         pos3 = clientX; pos4 = clientY;
+        
         document.onmouseup = dragEnd; document.onmousemove = dragAction;
         document.ontouchend = dragEnd; document.ontouchmove = dragAction;
         elm.setAttribute('data-dragging', 'true');
@@ -395,16 +391,21 @@ window.viewAIVersion = (index) => {
     setTimeout(createUI, 2000); 
 
     if (typeof SillyTavern !== 'undefined') {
-        console.log(`[${extensionName}] Ready.`);
+        console.log(`[${extensionName}] Ready. Fusion Complete.`);
+        
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
 
+        // 🔥 Auto-refresh loop
         setInterval(() => {
             const ins = document.getElementById('chronos-inspector');
             if (ins && ins.style.display === 'block') {
                 renderInspector();
             }
         }, 2000);
+
+    } else {
+        console.warn(`[${extensionName}] SillyTavern object not found.`);
     }
 })();
-    
+                
