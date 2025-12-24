@@ -1,9 +1,9 @@
-// index.js - Chronos V52 (God Sync) ⚡🌌
-// Logic: DOM Scraper (Reads ST UI directly) + Unlock Support
-// Fixes: Max Context cap when "Unlock Context" is checked
-// Fixes: Huge token discrepancy by syncing with Top Bar
+// index.js - Chronos V53 (Infinite Horizon) 🌌🔓
+// Logic: Auto-Expand Limit + 1M Context Support
+// Fixes: 8192 Stuck Issue when "Unlock Context" is active
+// UI: Neon V39 Style
 
-const extensionName = "Chronos_V52_GodSync";
+const extensionName = "Chronos_V53_InfiniteHorizon";
 
 // =================================================================
 // 1. HELPERS
@@ -38,23 +38,20 @@ const optimizePayload = (data) => {
         }
         return text;
     };
-
     if (data.body?.messages) {
         data.body.messages.forEach(msg => msg.content = processText(msg.content));
     } else if (data.body?.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
-
     setTimeout(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && ins.style.display === 'block') renderInspector();
     }, 500);
-    
     return data;
 };
 
 // =================================================================
-// 3. GOD SYNC CALCULATOR (DOM + UNLOCK)
+// 3. INFINITE CALCULATOR (THE FIX)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { memoryRange: "Loading...", original: 0, optimized: 0, saved: 0, max: 0 };
@@ -64,7 +61,7 @@ const calculateStats = () => {
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 3);
 
-    // --- A. CALCULATE SAVINGS ---
+    // --- A. SAVINGS ---
     let totalSavings = 0;
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
@@ -76,68 +73,57 @@ const calculateStats = () => {
         }
     });
 
-    // --- B. GET BASE LOAD (DOM SYNC) ---
-    // พยายามดึงจากแถบบนของ UI (Token Counter) เพราะแม่นที่สุด
+    // --- B. BASE LOAD (DOM SYNC) ---
     let stTotalTokens = context.tokens || 0;
-    
     const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
     if (tokenCounterEl) {
         const text = tokenCounterEl.innerText || "";
-        // Text format usually: "1234 / 8192" or "1234 / 0"
         const parts = text.split('/');
         if (parts.length > 0) {
             const domCurrent = parseInt(parts[0].replace(/[^0-9]/g, ''));
-            if (!isNaN(domCurrent) && domCurrent > 0) {
-                stTotalTokens = domCurrent;
-            }
+            if (!isNaN(domCurrent) && domCurrent > 0) stTotalTokens = domCurrent;
         }
     }
-
-    // Fallback if still 0 (e.g., startup)
     if (stTotalTokens === 0 && chat.length > 0) {
          let manualChat = 0;
          chat.forEach(m => manualChat += quickCount(m.mes));
-         stTotalTokens = manualChat + 2000; // Est. overhead
+         stTotalTokens = manualChat + 2000;
     }
 
-    // --- C. GET TRUE MAX (UNLOCK SUPPORT) ---
-    let maxTokens = 8192; 
-    
-    // 1. Check "Unlock" Settings directly
-    // ถ้ามีการปลดล็อค ให้เชื่อค่าจาก Settings > Slider
+    // --- C. TRUE MAX (INFINITE LOGIC) ---
+    let maxTokens = 8192; // ค่าเริ่มต้น
+    let isUnlocked = false;
+
+    // 1. Check Unlock Settings
     if (SillyTavern.settings) {
-        // เช็คว่าปลดล็อคไหม?
-        const isUnlocked = SillyTavern.settings.unlock_context || SillyTavern.settings.unlocked_context;
-        
-        if (isUnlocked) {
-            // ถ้าปลดล็อค ดึงค่า Context Size ตรงๆ
-            if (SillyTavern.settings.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
-            else if (SillyTavern.settings.max_context) maxTokens = parseInt(SillyTavern.settings.max_context);
-        } else {
-            // ถ้าไม่ปลดล็อค ให้ลองดูค่า Max Context ปกติ
-            if (SillyTavern.settings.max_context) maxTokens = parseInt(SillyTavern.settings.max_context);
+        if (SillyTavern.settings.unlock_context || SillyTavern.settings.unlocked_context) {
+            isUnlocked = true;
         }
     }
-    
-    // 2. DOM Override (Slider Value) - สำรอง
-    const maxCtxInput = document.getElementById('max_context');
-    if (maxCtxInput && !isNaN(parseInt(maxCtxInput.value))) {
-        const sliderVal = parseInt(maxCtxInput.value);
-        if (sliderVal > maxTokens) maxTokens = sliderVal;
+
+    // 2. Apply Logic
+    if (isUnlocked) {
+        // ถ้าปลดล็อคแล้ว ตั้งเพดานไว้ที่ 1 ล้าน (เผื่อ Gemini)
+        maxTokens = 1000000; 
+    } else {
+        // ถ้าไม่ได้ปลดล็อค ก็พยายามหาค่าจาก Slider
+        const maxCtxInput = document.getElementById('max_context');
+        if (maxCtxInput && !isNaN(parseInt(maxCtxInput.value))) {
+            maxTokens = parseInt(maxCtxInput.value);
+        } else if (context.max_context) {
+            maxTokens = context.max_context;
+        }
     }
 
-    // --- D. FINAL CALC ---
+    // 3. FINAL OVERRIDE (The "Stuck Fix")
+    // ถ้าโหลดจริง (71k) ดันทะลุ Max (8k) แสดงว่า Max ผิดแน่นอน -> ถีบ Max ขึ้นไปเลย
     const finalOptimizedLoad = Math.max(0, stTotalTokens - totalSavings);
-
-    // Memory Range Label
-    let memoryRangeText = "Healthy";
-    const ratio = finalOptimizedLoad / maxTokens;
-    if (ratio > 1) memoryRangeText = "Overflow";
-    else if (ratio > 0.9) memoryRangeText = "Near Limit";
-    else if (ratio > 0.7) memoryRangeText = "Heavy";
+    if (finalOptimizedLoad > maxTokens) {
+        maxTokens = finalOptimizedLoad; // Force equal (Full bar)
+    }
 
     return {
-        memoryRange: memoryRangeText,
+        memoryRange: (finalOptimizedLoad / maxTokens > 0.95) ? "Limit Reached" : "Healthy",
         original: stTotalTokens,
         optimized: finalOptimizedLoad,
         saved: totalSavings,
@@ -157,7 +143,13 @@ const renderInspector = () => {
 
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
-    const percent = stats.max > 0 ? Math.min((stats.optimized / stats.max) * 100, 100) : 0;
+    
+    // Percent calculation safe guard
+    let percent = 0;
+    if (stats.max > 0) {
+        percent = (stats.optimized / stats.max) * 100;
+        if (percent > 100) percent = 100;
+    }
 
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
         const actualIdx = chat.length - 1 - i;
@@ -170,7 +162,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V52 (God Sync)</span>
+            <span>🚀 CHRONOS V53 (Infinite)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -187,7 +179,7 @@ const renderInspector = () => {
 
             <div class="dash-row">
                 <span style="color:#fff;">🔋 Load (Real)</span>
-                <span class="dash-val" style="color:#fff;">${stats.optimized} / ${stats.max}</span>
+                <span class="dash-val" style="color:#fff;">${stats.optimized} / ${stats.max >= 999999 ? '1M+' : stats.max}</span>
             </div>
             
             <div class="dash-row" style="margin-top:4px; font-size:10px; color:#666;">
@@ -302,4 +294,4 @@ const createUI = () => {
         }, 2000);
     }
 })();
-        
+
