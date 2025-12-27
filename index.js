@@ -1,16 +1,15 @@
-// index.js - Chronos V66.9 (Pure Native - No Hardcode) 🌌📊
+// index.js - Chronos V66.10 (Pure Mirror) 🌌📊
 // UI: Neon V47 (Preserved)
-// Logic: 
-// 1. Max Context = SillyTavern.getContext().max_context (Strict)
-// 2. Memory = Range based on REAL max context
-// 3. 8192 Limit = REMOVED COMPLETELY
+// Logic:
+// 1. Limit Input -> REMOVED completely.
+// 2. Bar/Load -> Strictly mirrors SillyTavern's Context Bar (context.tokens).
+// 3. Range (#) -> Calculated strictly against ST's Max Context.
 
-const extensionName = "Chronos_V66_9_Pure";
+const extensionName = "Chronos_V66_10_Mirror";
 
 // =================================================================
 // 1. GLOBAL STATE
 // =================================================================
-let userManualLimit = 0; 
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
 const getChronosTokenizer = () => {
@@ -56,7 +55,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Strict Native Logic)
+// 3. CALCULATOR (Pure Mirror Logic)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { 
@@ -92,38 +91,43 @@ const calculateStats = () => {
         messageTokensArray.push(cleanCount);
     });
 
-    // --- B. STRICT MAX CONTEXT (No 8192 Fallback) ---
-    // ดึงค่าจาก Context หรือ Settings ของ Silly Tavern เท่านั้น
+    // --- B. STRICT MAX CONTEXT (From ST Only) ---
     let maxTokens = 0;
-    if (context.max_context) {
-        maxTokens = parseInt(context.max_context);
-    } else if (SillyTavern.settings?.context_size) {
-        maxTokens = parseInt(SillyTavern.settings.context_size);
+    if (context.max_context) maxTokens = parseInt(context.max_context);
+    else if (SillyTavern.settings?.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
+
+    // --- C. LOAD (From ST Only - The Blue Line) ---
+    // ใช้ค่า context.tokens ตรงๆ เพื่อให้ Bar ตรงกับเว็บเป๊ะๆ
+    let currentTotalUsage = context.tokens || 0;
+    if (currentTotalUsage === 0 && chat.length > 0) {
+        // Fallback กรณีค่าในตัวแปรยังไม่อัปเดต ให้ลองหาจาก DOM
+        const tokenCounterEl = document.querySelector('.token-counter');
+        if (tokenCounterEl) {
+            const parts = tokenCounterEl.innerText.split('/');
+            currentTotalUsage = parseInt(parts[0].replace(/[^0-9]/g, ''));
+        }
     }
 
-    // Override only if user manually inputs a limit in our UI
-    if (userManualLimit > 0) maxTokens = userManualLimit;
-
-    // --- C. MEMORY RANGE (Based on REAL Max) ---
-    // ใช้ค่า Token จริงที่ใช้ไป (เส้นสีฟ้า) เป็นตัวตั้ง
-    let currentTotalUsage = context.tokens || 0; 
-    
-    // คำนวณช่วงข้อความที่ "น่าจะ" อยู่ใน Memory
+    // --- D. RANGE (Calculated to fit Max) ---
     let accumulated = 0;
     let startIndex = 0;
     let endIndex = chat.length - 1;
 
-    // เราจะนับย้อนหลังจากข้อความล่าสุด จนกว่าจะเต็ม Max Limit
+    // Loop ถอยหลังจนเต็ม Max (ตามวิธีคิดของเว็บ)
     if (chat.length > 0 && maxTokens > 0) {
-        // ประมาณการ System Prompt Overhead (ส่วนที่หายไปที่ไม่ใช่แชท)
-        // ถ้าไม่ทราบ ให้คิดแบบ Simple: นับ Chat ย้อนหลังจนเต็ม Max
+        // เราใช้วิธีนับถอยหลังโดยดูว่าข้อความไหน "ใส่แล้วยังไม่เกิน Max"
+        // แต่เนื่องจาก ST มี System Prompt + World Info ด้วย เราจึงต้องเผื่อที่
+        // วิธีที่แม่นที่สุดถ้าไม่รู้ Overhead คือดูว่า Remaining Space เหลือเท่าไหร่
+        
+        // แต่โจทย์บอก "เว็บคำนวนยังไง เอาตามนั้น"
+        // ปกติ ST จะยัดข้อความจนเต็ม Context
         for (let i = chat.length - 1; i >= 0; i--) {
             let t = messageTokensArray[i];
             if (accumulated + t < maxTokens) {
                 accumulated += t;
                 startIndex = i;
             } else {
-                break; // เกิน Limit แล้ว หยุด
+                break; 
             }
         }
     } else {
@@ -137,18 +141,13 @@ const calculateStats = () => {
         rangeLabel: rangeLabel,
         max: maxTokens,
         totalMsgs: chat.length,
-        currentLoad: currentTotalUsage // ส่งค่าการใช้งานจริงไปแสดงผล (เส้นสีฟ้า)
+        currentLoad: currentTotalUsage // ค่าจริงจากเส้นเว็บ
     };
 };
 
 // =================================================================
-// 4. UI RENDERER
+// 4. UI RENDERER (Cleaned Up - No Input)
 // =================================================================
-window.updateManualLimit = (val) => {
-    userManualLimit = parseInt(val);
-    renderInspector();
-};
-
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
@@ -159,7 +158,7 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    // Percent Bar: ใช้ค่าจริงหารด้วย Max จริง
+    // Percent based on Real ST Load
     const percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
     
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
@@ -172,12 +171,10 @@ const renderInspector = () => {
     }).join('');
 
     const fmt = (n) => n.toLocaleString();
-    const inputValue = userManualLimit > 0 ? userManualLimit : '';
-    const placeholder = fmt(stats.max);
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.9 (Native)</span>
+            <span>🚀 CHRONOS V66.10</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -196,12 +193,7 @@ const renderInspector = () => {
                 <span style="color:#fff;">🧠 Memory</span>
                 <div style="display:flex; align-items:center; gap:5px;">
                     <span class="dash-val" style="color:#00E676;">${stats.rangeLabel}</span>
-                    <span style="color:#555; font-size:10px;">/ Limit:</span>
-                    <input type="number" 
-                           value="${inputValue}" 
-                           placeholder="${placeholder}"
-                           onchange="updateManualLimit(this.value)"
-                           style="width: 50px; background: #222; border: 1px solid #444; color: #fff; border-radius: 3px; font-size: 11px; padding: 2px; text-align:right;">
+                    <span style="color:#555; font-size:10px;">(${fmt(stats.currentLoad)}/${fmt(stats.max)})</span>
                 </div>
             </div>
 
@@ -392,4 +384,4 @@ const createUI = () => {
         }, 2000);
     }
 })();
-                               
+        
