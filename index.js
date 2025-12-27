@@ -1,11 +1,11 @@
-// index.js - Chronos V66.8 (Memory Range Return) 🌌📊
-// UI: Neon V47 (Strictly Preserved)
-// Logic Update:
-// 1. Tokens Saved (🔋): Calculated (Raw - Clean)
-// 2. Memory (🧠): Message Range (#Start -> #End) based on Context Limit
-// 3. Total Messages (📚): Count
+// index.js - Chronos V66.9 (Pure Native - No Hardcode) 🌌📊
+// UI: Neon V47 (Preserved)
+// Logic: 
+// 1. Max Context = SillyTavern.getContext().max_context (Strict)
+// 2. Memory = Range based on REAL max context
+// 3. 8192 Limit = REMOVED COMPLETELY
 
-const extensionName = "Chronos_V66_8_Range";
+const extensionName = "Chronos_V66_9_Pure";
 
 // =================================================================
 // 1. GLOBAL STATE
@@ -56,7 +56,7 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Range Logic)
+// 3. CALCULATOR (Strict Native Logic)
 // =================================================================
 const calculateStats = () => {
     if (typeof SillyTavern === 'undefined') return { 
@@ -72,7 +72,7 @@ const calculateStats = () => {
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => (tokenizer && typeof tokenizer.encode === 'function') ? tokenizer.encode(text).length : Math.round(text.length / 3);
 
-    // --- A. Calculate Savings & Prepare Token Array ---
+    // --- A. Savings Calculation ---
     let totalSaved = 0;
     let messageTokensArray = []; 
 
@@ -85,46 +85,45 @@ const calculateStats = () => {
             const cleanText = stripHtmlToText(rawMsg);
             const formattedClean = `[System Content:\n${cleanText}]`;
             cleanCount = quickCount(formattedClean);
-            
-            // Calculate Savings
-            if (rawCount > cleanCount) {
-                totalSaved += (rawCount - cleanCount);
-            }
+            if (rawCount > cleanCount) totalSaved += (rawCount - cleanCount);
         } else {
             cleanCount = rawCount;
         }
         messageTokensArray.push(cleanCount);
     });
 
-    // --- B. MAX CONTEXT ---
-    let maxTokens = 8192;
-    if (userManualLimit > 0) {
-        maxTokens = userManualLimit;
-    } else {
-        const isUnlocked = SillyTavern.settings?.unlock_context || SillyTavern.settings?.unlocked_context;
-        if (isUnlocked) {
-            if (SillyTavern.settings?.context_size > 8192) maxTokens = parseInt(SillyTavern.settings.context_size);
-            else maxTokens = 1000000;
-        } else {
-            if (SillyTavern.settings?.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
-            else if (context.max_context) maxTokens = parseInt(context.max_context);
-        }
+    // --- B. STRICT MAX CONTEXT (No 8192 Fallback) ---
+    // ดึงค่าจาก Context หรือ Settings ของ Silly Tavern เท่านั้น
+    let maxTokens = 0;
+    if (context.max_context) {
+        maxTokens = parseInt(context.max_context);
+    } else if (SillyTavern.settings?.context_size) {
+        maxTokens = parseInt(SillyTavern.settings.context_size);
     }
 
-    // --- C. CALCULATE MEMORY RANGE (Backwards) ---
-    // นับย้อนหลังว่าข้อความไหนบ้างที่ยัดลงใน Context ไหว
+    // Override only if user manually inputs a limit in our UI
+    if (userManualLimit > 0) maxTokens = userManualLimit;
+
+    // --- C. MEMORY RANGE (Based on REAL Max) ---
+    // ใช้ค่า Token จริงที่ใช้ไป (เส้นสีฟ้า) เป็นตัวตั้ง
+    let currentTotalUsage = context.tokens || 0; 
+    
+    // คำนวณช่วงข้อความที่ "น่าจะ" อยู่ใน Memory
     let accumulated = 0;
     let startIndex = 0;
     let endIndex = chat.length - 1;
 
-    if (chat.length > 0) {
+    // เราจะนับย้อนหลังจากข้อความล่าสุด จนกว่าจะเต็ม Max Limit
+    if (chat.length > 0 && maxTokens > 0) {
+        // ประมาณการ System Prompt Overhead (ส่วนที่หายไปที่ไม่ใช่แชท)
+        // ถ้าไม่ทราบ ให้คิดแบบ Simple: นับ Chat ย้อนหลังจนเต็ม Max
         for (let i = chat.length - 1; i >= 0; i--) {
             let t = messageTokensArray[i];
             if (accumulated + t < maxTokens) {
                 accumulated += t;
                 startIndex = i;
             } else {
-                break; // เต็มแล้ว หยุด
+                break; // เกิน Limit แล้ว หยุด
             }
         }
     } else {
@@ -138,7 +137,7 @@ const calculateStats = () => {
         rangeLabel: rangeLabel,
         max: maxTokens,
         totalMsgs: chat.length,
-        currentLoad: accumulated // ใช้สำหรับวาด Progress Bar
+        currentLoad: currentTotalUsage // ส่งค่าการใช้งานจริงไปแสดงผล (เส้นสีฟ้า)
     };
 };
 
@@ -160,7 +159,7 @@ const renderInspector = () => {
     const chat = SillyTavern.getContext().chat || [];
     const stats = calculateStats();
     
-    // Percent based on messages fitting in context
+    // Percent Bar: ใช้ค่าจริงหารด้วย Max จริง
     const percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
     
     let listHtml = chat.slice(-5).reverse().map((msg, i) => {
@@ -178,7 +177,7 @@ const renderInspector = () => {
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.8</span>
+            <span>🚀 CHRONOS V66.9 (Native)</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -197,12 +196,12 @@ const renderInspector = () => {
                 <span style="color:#fff;">🧠 Memory</span>
                 <div style="display:flex; align-items:center; gap:5px;">
                     <span class="dash-val" style="color:#00E676;">${stats.rangeLabel}</span>
-                    <span style="color:#555; font-size:10px;">/</span>
+                    <span style="color:#555; font-size:10px;">/ Limit:</span>
                     <input type="number" 
                            value="${inputValue}" 
                            placeholder="${placeholder}"
                            onchange="updateManualLimit(this.value)"
-                           style="width: 60px; background: #222; border: 1px solid #444; color: #fff; border-radius: 3px; font-size: 11px; padding: 2px; text-align:right;">
+                           style="width: 50px; background: #222; border: 1px solid #444; color: #fff; border-radius: 3px; font-size: 11px; padding: 2px; text-align:right;">
                 </div>
             </div>
 
@@ -393,4 +392,4 @@ const createUI = () => {
         }, 2000);
     }
 })();
-        
+                               
