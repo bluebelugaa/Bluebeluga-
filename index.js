@@ -1,23 +1,21 @@
-// index.js - Chronos V66.11 (Stabilized & Fix) 🌌🛠️
+// index.js - Chronos V66.12 (Global Access Fix) 🌌🔧
 // UI: Neon V47 (Preserved)
-// Fix: Added safety checks to prevent crashes when ST data isn't ready.
-// Logic: Mirrors ST Context Bar & Range strictly.
+// Fix: Aggressive variable finding for 'max_context' and 'tokens' to fix 0/0 issue.
 
-const extensionName = "Chronos_V66_11_Fix";
+const extensionName = "Chronos_V66_12_GlobalFix";
 
 // =================================================================
 // 1. GLOBAL STATE
 // =================================================================
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 
-// Helper to safely get the tokenizer
 const getChronosTokenizer = () => {
     try {
-        if (typeof SillyTavern === 'undefined') return null;
-        const ctx = SillyTavern.getContext();
-        const model = ctx?.model || ctx?.settings?.model || SillyTavern?.settings?.model;
-        if (model && SillyTavern.Tokenizers) {
-             return SillyTavern.Tokenizers.getTokenizerForModel(model);
+        // Try global ST object first
+        if (typeof SillyTavern !== 'undefined' && SillyTavern.Tokenizers) {
+            const ctx = SillyTavern.getContext();
+            const model = ctx?.model || SillyTavern.settings?.model;
+            return SillyTavern.Tokenizers.getTokenizerForModel(model);
         }
         return null;
     } catch (e) { return null; }
@@ -50,7 +48,6 @@ const optimizePayload = (data) => {
     } else if (data.body?.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
-    // Refresh UI slightly after request
     setTimeout(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && ins.style.display === 'block') renderInspector();
@@ -59,28 +56,34 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Safe Mirror Logic)
+// 3. CALCULATOR (Aggressive Finder)
 // =================================================================
 const calculateStats = () => {
     // Default safe values
-    const def = { savedTokens: 0, rangeLabel: "...", max: 0, totalMsgs: 0, currentLoad: 0 };
+    const def = { savedTokens: 0, rangeLabel: "Waiting...", max: 0, totalMsgs: 0, currentLoad: 0 };
 
-    if (typeof SillyTavern === 'undefined') return def;
+    // 1. Try to get Chat Data
+    let chat = [];
+    let context = {};
     
-    // Safely access context
-    const context = SillyTavern.getContext() || {};
-    const chat = context.chat || window.chat || []; // Try window.chat as fallback
-    
+    // Attempt 1: SillyTavern Global
+    if (typeof SillyTavern !== 'undefined') {
+        context = SillyTavern.getContext() || {};
+        chat = context.chat || [];
+    }
+    // Attempt 2: Window Global (Fallback)
+    if ((!chat || chat.length === 0) && typeof window.chat !== 'undefined') {
+        chat = window.chat;
+    }
+
     if (!chat || chat.length === 0) return def;
 
+    // Tokenizer
     const tokenizer = getChronosTokenizer();
-    // Helper to count tokens
     const quickCount = (text) => {
         if (!text) return 0;
-        if (tokenizer && typeof tokenizer.encode === 'function') {
-            return tokenizer.encode(text).length;
-        }
-        return Math.ceil(text.length / 3); // Crude fallback
+        if (tokenizer && typeof tokenizer.encode === 'function') return tokenizer.encode(text).length;
+        return Math.ceil(text.length / 3);
     };
 
     // --- A. Savings Calculation ---
@@ -91,7 +94,6 @@ const calculateStats = () => {
         const rawMsg = msg.mes || "";
         let rawCount = quickCount(rawMsg);
         let cleanCount = 0;
-
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
             const cleanText = stripHtmlToText(rawMsg);
             const formattedClean = `[System Content:\n${cleanText}]`;
@@ -103,42 +105,78 @@ const calculateStats = () => {
         messageTokensArray.push(cleanCount);
     });
 
-    // --- B. MAX CONTEXT ---
+    // --- B. FIND MAX CONTEXT (The Fix) ---
     let maxTokens = 0;
-    if (context.max_context) maxTokens = parseInt(context.max_context);
-    else if (SillyTavern.settings?.context_size) maxTokens = parseInt(SillyTavern.settings.context_size);
-
-    // --- C. CURRENT LOAD (From ST) ---
-    let currentTotalUsage = context.tokens || 0;
     
-    // Fallback: If context.tokens is 0/undefined, try to scrape DOM (Safe check)
-    if (!currentTotalUsage) {
+    // Priority 1: SillyTavern Context
+    if (context.max_context && context.max_context > 0) maxTokens = parseInt(context.max_context);
+    
+    // Priority 2: SillyTavern Settings
+    else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) {
+        maxTokens = parseInt(SillyTavern.settings.context_size);
+    }
+    
+    // Priority 3: Window/Global Settings (Common in some versions)
+    else if (typeof window.settings !== 'undefined' && window.settings.context_size) {
+        maxTokens = parseInt(window.settings.context_size);
+    }
+    else if (typeof window.max_context !== 'undefined') {
+        maxTokens = parseInt(window.max_context);
+    }
+
+    // --- C. FIND CURRENT LOAD (The Fix) ---
+    let currentTotalUsage = 0;
+    
+    // Priority 1: Context Tokens
+    if (context.tokens && context.tokens > 0) currentTotalUsage = context.tokens;
+    
+    // Priority 2: DOM scraping (More robust selector)
+    else {
         try {
-            const tokenCounterEl = document.getElementById('token_counter') || document.querySelector('.token-counter');
-            if (tokenCounterEl) {
-                const txt = tokenCounterEl.innerText || "";
-                const parts = txt.split('/');
-                if (parts[0]) currentTotalUsage = parseInt(parts[0].replace(/[^0-9]/g, ''));
+            // Try standard ID
+            let el = document.getElementById('token_counter');
+            // Try class
+            if (!el) el = document.querySelector('.token-counter');
+            // Try mobile/sidebar specific
+            if (!el) el = document.querySelector('#token-count-total');
+            
+            if (el) {
+                const txt = el.innerText || el.textContent || "";
+                // Extract first number sequence found
+                const match = txt.match(/(\d+)[\s\/]/); 
+                if (match && match[1]) currentTotalUsage = parseInt(match[1]);
+                else if (txt.trim().match(/^\d+$/)) currentTotalUsage = parseInt(txt);
             }
         } catch(e) {}
     }
 
-    // --- D. RANGE CALCULATION ---
-    let rangeLabel = "Calculating...";
+    // Fallback: If still 0, calculate manually from chat (Estimate) to prevent 0/0
+    if (currentTotalUsage === 0) {
+         currentTotalUsage = messageTokensArray.reduce((a, b) => a + b, 0);
+         // Add minimal padding for system prompt if unknown
+         if (currentTotalUsage > 0) currentTotalUsage += 200; 
+    }
     
+    // Fallback for Max if still 0 (Prevent div by zero)
+    if (maxTokens === 0 && currentTotalUsage > 0) {
+        // Assume standard size if we can't find it
+        maxTokens = 8192; 
+    }
+
+    // --- D. RANGE CALCULATION ---
+    let rangeLabel = "Ready";
     if (maxTokens > 0) {
         let accumulated = 0;
         let startIndex = 0;
         let endIndex = chat.length - 1;
         
-        // Loop backwards to see what fits in Max Context
         for (let i = chat.length - 1; i >= 0; i--) {
             let t = messageTokensArray[i];
             if (accumulated + t < maxTokens) {
                 accumulated += t;
                 startIndex = i;
             } else {
-                break; // Stop when full
+                break;
             }
         }
         rangeLabel = `#${startIndex} ➔ #${endIndex}`;
@@ -160,20 +198,26 @@ const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
-    // Safety check for msgList
     const msgListEl = ins.querySelector('.msg-list');
     const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
 
-    const context = (typeof SillyTavern !== 'undefined') ? SillyTavern.getContext() : {};
-    const chat = context.chat || window.chat || [];
-    
+    // Get Data
+    let context = {};
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') {
+        context = SillyTavern.getContext() || {};
+        chat = context.chat || [];
+    } else if (typeof window.chat !== 'undefined') {
+        chat = window.chat;
+    }
+
     const stats = calculateStats();
     
     const percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
     let listHtml = "";
-    if (chat.length > 0) {
+    if (chat && chat.length > 0) {
         listHtml = chat.slice(-5).reverse().map((msg, i) => {
             const actualIdx = chat.length - 1 - i;
             const cleanContent = msg.mes || "";
@@ -184,12 +228,12 @@ const renderInspector = () => {
                     </div>`;
         }).join('');
     } else {
-        listHtml = `<div style="padding:10px; color:#666; font-style:italic;">No messages...</div>`;
+        listHtml = `<div style="padding:10px; color:#666;">No messages found.</div>`;
     }
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.11</span>
+            <span>🚀 CHRONOS V66.12</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -241,10 +285,9 @@ const renderInspector = () => {
 };
 
 // =================================================================
-// 5. STYLES (Neon V47 - Preserved)
+// 5. STYLES (Preserved)
 // =================================================================
 const injectStyles = () => {
-    // Remove existing if any to avoid duplicates
     const exist = document.getElementById('chronos-style');
     if (exist) exist.remove();
 
@@ -308,7 +351,7 @@ const injectStyles = () => {
 };
 
 // =================================================================
-// 6. UTILS
+// 6. UTILS & INIT
 // =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
@@ -352,16 +395,18 @@ const makeDraggable = (elm, type) => {
 window.searchById = () => {
     const idInput = document.getElementById('chronos-search-id');
     const id = parseInt(idInput.value);
-    const context = (typeof SillyTavern !== 'undefined') ? SillyTavern.getContext() : {};
-    const chat = context.chat || window.chat || [];
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    else if (typeof window.chat !== 'undefined') chat = window.chat;
     
     if (isNaN(id) || id < 0 || id >= chat.length) { alert("Invalid ID"); return; }
     viewAIVersion(id);
 };
 
 window.viewAIVersion = (index) => {
-    const context = (typeof SillyTavern !== 'undefined') ? SillyTavern.getContext() : {};
-    const chat = context.chat || window.chat || [];
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    else if (typeof window.chat !== 'undefined') chat = window.chat;
     
     const msg = chat[index];
     if (!msg) return;
@@ -379,9 +424,6 @@ window.viewAIVersion = (index) => {
     contentDiv.innerHTML = `<div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>`;
 };
 
-// =================================================================
-// 7. INITIALIZATION
-// =================================================================
 const createUI = () => {
     const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
@@ -399,17 +441,13 @@ const createUI = () => {
 (function() {
     injectStyles();
     setTimeout(createUI, 2000); 
-    
-    // Register hooks safely
     if (typeof SillyTavern !== 'undefined' && SillyTavern.extension_manager) {
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
     }
-
-    // Loop
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && ins.style.display === 'block') renderInspector();
     }, 2000);
 })();
-                 
+
