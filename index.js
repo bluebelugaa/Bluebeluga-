@@ -1,17 +1,22 @@
-// index.js - Chronos V66.12 (Global Access Fix) 🌌🔧
+// index.js - Chronos V66.15 (Numpad & Anti-Lag) 🌌🔢
 // UI: Neon V47 (Preserved)
-// Fix: Aggressive variable finding for 'max_context' and 'tokens' to fix 0/0 issue.
+// Feature: On-screen Numpad for ID search (No mobile keyboard needed).
+// Optimization: Added caching to prevent phone freezing.
 
-const extensionName = "Chronos_V66_12_GlobalFix";
+const extensionName = "Chronos_V66_15_Numpad";
 
 // =================================================================
-// 1. GLOBAL STATE
+// 1. GLOBAL STATE & CACHE
 // =================================================================
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
+let cache = {
+    lastChatLen: -1,
+    lastStats: null,
+    lastContextMax: 0
+};
 
 const getChronosTokenizer = () => {
     try {
-        // Try global ST object first
         if (typeof SillyTavern !== 'undefined' && SillyTavern.Tokenizers) {
             const ctx = SillyTavern.getContext();
             const model = ctx?.model || SillyTavern.settings?.model;
@@ -37,6 +42,9 @@ const stripHtmlToText = (html) => {
 // 2. HOOKS
 // =================================================================
 const optimizePayload = (data) => {
+    // Reset cache on new message so we recalculate
+    cache.lastChatLen = -1; 
+    
     const processText = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) {
             return `[System Content:\n${stripHtmlToText(text)}]`;
@@ -56,29 +64,44 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Aggressive Finder)
+// 3. CALCULATOR (Optimized)
 // =================================================================
-const calculateStats = () => {
-    // Default safe values
-    const def = { savedTokens: 0, rangeLabel: "Waiting...", max: 0, totalMsgs: 0, currentLoad: 0 };
+const findMaxContext = (contextObj) => {
+    let max = 0;
+    if (contextObj.max_context && contextObj.max_context > 0) max = parseInt(contextObj.max_context);
+    else if (typeof SillyTavern !== 'undefined') {
+        if (SillyTavern.settings?.context_size) max = parseInt(SillyTavern.settings.context_size);
+    }
+    if (max === 0 && typeof window.settings !== 'undefined' && window.settings.context_size) {
+        max = parseInt(window.settings.context_size);
+    }
+    if (max === 0) {
+        // Fallback default
+        max = 4096; 
+    }
+    return max;
+};
 
-    // 1. Try to get Chat Data
+const calculateStats = () => {
+    // 1. Get Chat Data
     let chat = [];
     let context = {};
-    
-    // Attempt 1: SillyTavern Global
     if (typeof SillyTavern !== 'undefined') {
         context = SillyTavern.getContext() || {};
         chat = context.chat || [];
-    }
-    // Attempt 2: Window Global (Fallback)
-    if ((!chat || chat.length === 0) && typeof window.chat !== 'undefined') {
-        chat = window.chat;
+    } else if (typeof window.chat !== 'undefined') chat = window.chat;
+
+    if (!chat || chat.length === 0) return { savedTokens: 0, rangeLabel: "Waiting...", max: 0, totalMsgs: 0, currentLoad: 0 };
+
+    // 2. Check Cache (Anti-Lag Optimization)
+    // If chat length hasn't changed, reuse the hard calculations, just update the Range label based on potentially changed Max Context
+    const maxTokens = findMaxContext(context);
+    
+    if (chat.length === cache.lastChatLen && cache.lastStats && maxTokens === cache.lastContextMax) {
+        return cache.lastStats;
     }
 
-    if (!chat || chat.length === 0) return def;
-
-    // Tokenizer
+    // 3. Heavy Calculation (Only runs if needed)
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => {
         if (!text) return 0;
@@ -86,12 +109,12 @@ const calculateStats = () => {
         return Math.ceil(text.length / 3);
     };
 
-    // --- A. Savings Calculation ---
     let totalSaved = 0;
     let messageTokensArray = []; 
 
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
+        // Simple caching for individual messages could go here, but length check is usually enough
         let rawCount = quickCount(rawMsg);
         let cleanCount = 0;
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
@@ -105,115 +128,104 @@ const calculateStats = () => {
         messageTokensArray.push(cleanCount);
     });
 
-    // --- B. FIND MAX CONTEXT (The Fix) ---
-    let maxTokens = 0;
-    
-    // Priority 1: SillyTavern Context
-    if (context.max_context && context.max_context > 0) maxTokens = parseInt(context.max_context);
-    
-    // Priority 2: SillyTavern Settings
-    else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) {
-        maxTokens = parseInt(SillyTavern.settings.context_size);
-    }
-    
-    // Priority 3: Window/Global Settings (Common in some versions)
-    else if (typeof window.settings !== 'undefined' && window.settings.context_size) {
-        maxTokens = parseInt(window.settings.context_size);
-    }
-    else if (typeof window.max_context !== 'undefined') {
-        maxTokens = parseInt(window.max_context);
-    }
+    let currentTotalUsage = context.tokens || 0;
+    if (currentTotalUsage === 0) currentTotalUsage = messageTokensArray.reduce((a,b)=>a+b, 0);
 
-    // --- C. FIND CURRENT LOAD (The Fix) ---
-    let currentTotalUsage = 0;
+    // Range Calculation
+    let rangeLabel = "Calculating...";
+    let startIndex = 0;
+    let endIndex = chat.length - 1;
+    let accumulated = 0;
     
-    // Priority 1: Context Tokens
-    if (context.tokens && context.tokens > 0) currentTotalUsage = context.tokens;
-    
-    // Priority 2: DOM scraping (More robust selector)
-    else {
-        try {
-            // Try standard ID
-            let el = document.getElementById('token_counter');
-            // Try class
-            if (!el) el = document.querySelector('.token-counter');
-            // Try mobile/sidebar specific
-            if (!el) el = document.querySelector('#token-count-total');
-            
-            if (el) {
-                const txt = el.innerText || el.textContent || "";
-                // Extract first number sequence found
-                const match = txt.match(/(\d+)[\s\/]/); 
-                if (match && match[1]) currentTotalUsage = parseInt(match[1]);
-                else if (txt.trim().match(/^\d+$/)) currentTotalUsage = parseInt(txt);
-            }
-        } catch(e) {}
-    }
-
-    // Fallback: If still 0, calculate manually from chat (Estimate) to prevent 0/0
-    if (currentTotalUsage === 0) {
-         currentTotalUsage = messageTokensArray.reduce((a, b) => a + b, 0);
-         // Add minimal padding for system prompt if unknown
-         if (currentTotalUsage > 0) currentTotalUsage += 200; 
-    }
-    
-    // Fallback for Max if still 0 (Prevent div by zero)
-    if (maxTokens === 0 && currentTotalUsage > 0) {
-        // Assume standard size if we can't find it
-        maxTokens = 8192; 
-    }
-
-    // --- D. RANGE CALCULATION ---
-    let rangeLabel = "Ready";
-    if (maxTokens > 0) {
-        let accumulated = 0;
-        let startIndex = 0;
-        let endIndex = chat.length - 1;
-        
-        for (let i = chat.length - 1; i >= 0; i--) {
-            let t = messageTokensArray[i];
-            if (accumulated + t < maxTokens) {
-                accumulated += t;
-                startIndex = i;
-            } else {
-                break;
-            }
+    for (let i = chat.length - 1; i >= 0; i--) {
+        let t = messageTokensArray[i];
+        if (accumulated + t < maxTokens) {
+            accumulated += t;
+            startIndex = i;
+        } else {
+            break;
         }
-        rangeLabel = `#${startIndex} ➔ #${endIndex}`;
     }
+    rangeLabel = `#${startIndex} ➔ #${endIndex}`;
 
-    return {
+    // Update Cache
+    const result = {
         savedTokens: totalSaved,
         rangeLabel: rangeLabel,
         max: maxTokens,
         totalMsgs: chat.length,
         currentLoad: currentTotalUsage
     };
+
+    cache.lastChatLen = chat.length;
+    cache.lastStats = result;
+    cache.lastContextMax = maxTokens;
+
+    return result;
 };
 
 // =================================================================
-// 4. UI RENDERER
+// 4. NUMPAD FUNCTIONS
+// =================================================================
+window.numpadType = (num) => {
+    const input = document.getElementById('chronos-search-id-display');
+    if (!input) return;
+    let current = input.innerText;
+    if (current === "ID...") current = "";
+    if (current.length < 5) { // Limit length
+        input.innerText = current + num;
+        input.style.color = "#fff";
+    }
+};
+
+window.numpadDel = () => {
+    const input = document.getElementById('chronos-search-id-display');
+    if (!input) return;
+    let current = input.innerText;
+    if (current === "ID..." || current.length === 0) return;
+    input.innerText = current.slice(0, -1);
+    if (input.innerText === "") {
+        input.innerText = "ID...";
+        input.style.color = "#666";
+    }
+};
+
+window.numpadGo = () => {
+    const input = document.getElementById('chronos-search-id-display');
+    if (!input) return;
+    const val = input.innerText;
+    if (val === "ID..." || val === "") return;
+    
+    const id = parseInt(val);
+    window.searchById(id);
+};
+
+// =================================================================
+// 5. UI RENDERER
 // =================================================================
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
+    // Preserve Numpad Input State
+    const oldInput = document.getElementById('chronos-search-id-display');
+    const prevInputVal = oldInput ? oldInput.innerText : "ID...";
+    const prevColor = oldInput ? oldInput.style.color : "#666";
+
+    // Preserve Scroll
     const msgListEl = ins.querySelector('.msg-list');
     const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
 
-    // Get Data
-    let context = {};
     let chat = [];
-    if (typeof SillyTavern !== 'undefined') {
-        context = SillyTavern.getContext() || {};
-        chat = context.chat || [];
-    } else if (typeof window.chat !== 'undefined') {
-        chat = window.chat;
-    }
+    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    else if (typeof window.chat !== 'undefined') chat = window.chat;
 
     const stats = calculateStats();
     
-    const percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
+    // Percent Safety
+    let percent = 0;
+    if (stats.max > 0) percent = Math.min((stats.currentLoad / stats.max) * 100, 100);
+    
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
     let listHtml = "";
@@ -221,19 +233,17 @@ const renderInspector = () => {
         listHtml = chat.slice(-5).reverse().map((msg, i) => {
             const actualIdx = chat.length - 1 - i;
             const cleanContent = msg.mes || "";
-            const preview = cleanContent.substring(0, 25).replace(/</g, '&lt;');
+            const preview = cleanContent.substring(0, 20).replace(/</g, '&lt;');
             const roleIcon = msg.is_user ? '👤' : '🤖';
             return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">
                         <span style="color:#D500F9;">#${actualIdx}</span> ${roleIcon} ${preview}...
                     </div>`;
         }).join('');
-    } else {
-        listHtml = `<div style="padding:10px; color:#666;">No messages found.</div>`;
     }
 
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.12</span>
+            <span>🚀 CHRONOS V66.15</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -250,10 +260,7 @@ const renderInspector = () => {
 
             <div class="dash-row" style="align-items:center;">
                 <span style="color:#fff;">🧠 Memory</span>
-                <div style="display:flex; align-items:center; gap:5px;">
-                    <span class="dash-val" style="color:#00E676;">${stats.rangeLabel}</span>
-                    <span style="color:#555; font-size:10px;">(${fmt(stats.currentLoad)}/${fmt(stats.max)})</span>
-                </div>
+                <span class="dash-val" style="color:#00E676; font-size:14px;">${stats.rangeLabel}</span>
             </div>
 
             <div class="progress-container">
@@ -266,9 +273,26 @@ const renderInspector = () => {
         </div>
 
         <div class="ins-body">
-            <div style="display:flex; gap:5px; margin-bottom:10px;">
-                <input type="number" id="chronos-search-id" placeholder="ID..." style="background:#222; border:1px solid #444; color:#fff; width:60px; padding:4px; border-radius:3px;">
-                <button onclick="searchById()" style="background:#D500F9; border:none; color:#000; padding:4px 10px; border-radius:3px; cursor:pointer; font-weight:bold;">INSPECT</button>
+            <div style="background:#1a1a1a; padding:10px; border-radius:5px; margin-bottom:10px; border:1px solid #333;">
+                <div id="chronos-search-id-display" style="background:#000; color:${prevColor}; padding:8px; text-align:right; font-size:16px; font-family:monospace; border-radius:3px; margin-bottom:8px; border:1px solid #444; height:36px; display:flex; align-items:center; justify-content:flex-end;">${prevInputVal}</div>
+                
+                <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px;">
+                    <button class="num-btn" onclick="numpadType(1)">1</button>
+                    <button class="num-btn" onclick="numpadType(2)">2</button>
+                    <button class="num-btn" onclick="numpadType(3)">3</button>
+                    <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
+
+                    <button class="num-btn" onclick="numpadType(4)">4</button>
+                    <button class="num-btn" onclick="numpadType(5)">5</button>
+                    <button class="num-btn" onclick="numpadType(6)">6</button>
+                    <button class="num-btn go-btn" onclick="numpadGo()" style="grid-row: span 2;">GO</button>
+
+                    <button class="num-btn" onclick="numpadType(7)">7</button>
+                    <button class="num-btn" onclick="numpadType(8)">8</button>
+                    <button class="num-btn" onclick="numpadType(9)">9</button>
+
+                    <button class="num-btn" onclick="numpadType(0)" style="grid-column: span 3;">0</button>
+                </div>
             </div>
             
             <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase;">Recent Messages</div>
@@ -285,7 +309,7 @@ const renderInspector = () => {
 };
 
 // =================================================================
-// 5. STYLES (Preserved)
+// 6. STYLES (Updated for Numpad)
 // =================================================================
 const injectStyles = () => {
     const exist = document.getElementById('chronos-style');
@@ -337,9 +361,14 @@ const injectStyles = () => {
         .msg-item { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; transition: 0.2s;}
         .msg-item:hover { background: #330044; color: #fff; padding-left: 10px;}
         
+        /* NUMPAD STYLES */
+        .num-btn { background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 8px; cursor: pointer; font-weight: bold; transition: 0.1s; }
+        .num-btn:active { background: #D500F9; color: #fff; transform: scale(0.95); }
+        .del-btn { color: #ff4081; border-color: #550022; }
+        .go-btn { background: #00E676; color: #000; border-color: #00b359; display:flex; align-items:center; justify-content:center; }
+        
         #view-target-wrapper { margin-top:10px; border-top:1px dashed #444; padding-top:10px; display:none; animation: fade-in 0.3s; }
         .view-area { background: #080808; color: #00E676; padding: 10px; height: 140px; overflow-y: auto; border: 1px solid #333; border-radius: 4px; margin-top: 5px; white-space: pre-wrap; word-wrap: break-word; }
-        .stat-badge { display: flex; justify-content: space-between; margin-top: 5px; background: #222; padding: 6px; border-radius: 4px; border: 1px solid #333; }
         
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #111; }
@@ -351,7 +380,7 @@ const injectStyles = () => {
 };
 
 // =================================================================
-// 6. UTILS & INIT
+// 7. UTILS & INIT
 // =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
@@ -392,14 +421,15 @@ const makeDraggable = (elm, type) => {
     elm.onmousedown = dragStart; elm.ontouchstart = dragStart;
 };
 
-window.searchById = () => {
-    const idInput = document.getElementById('chronos-search-id');
-    const id = parseInt(idInput.value);
+window.searchById = (id) => {
     let chat = [];
     if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
     else if (typeof window.chat !== 'undefined') chat = window.chat;
     
-    if (isNaN(id) || id < 0 || id >= chat.length) { alert("Invalid ID"); return; }
+    if (isNaN(id) || id < 0 || id >= chat.length) { 
+        // flash error visual could go here
+        return; 
+    }
     viewAIVersion(id);
 };
 
@@ -425,7 +455,7 @@ window.viewAIVersion = (index) => {
 };
 
 const createUI = () => {
-    const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
+    const oldOrb = document.getElementById('chronos-orb');if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
     const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
     const ins = document.createElement('div'); ins.id = 'chronos-inspector';
@@ -447,7 +477,7 @@ const createUI = () => {
     }
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
+        // Only render if visible (Saves battery/CPU)
         if (ins && ins.style.display === 'block') renderInspector();
     }, 2000);
 })();
-    
