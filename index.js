@@ -1,14 +1,21 @@
-// index.js - Chronos V66.15 (Numpad & Anti-Lag) 🌌🔢
+// index.js - Chronos V66.16 (Stateful UI) 🌌🧠
 // UI: Neon V47 (Preserved)
-// Feature: On-screen Numpad for ID search (No mobile keyboard needed).
-// Optimization: Added caching to prevent phone freezing.
+// Fix 1: Message viewer persists after refresh (State management).
+// Fix 2: Numpad is collapsible (Hidden by default).
 
-const extensionName = "Chronos_V66_15_Numpad";
+const extensionName = "Chronos_V66_16_Stateful";
 
 // =================================================================
 // 1. GLOBAL STATE & CACHE
 // =================================================================
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
+let uiState = {
+    showNumpad: false,    // Is Numpad open?
+    viewingId: null,      // Currently inspected message ID
+    numpadValue: "ID..."  // Current value in numpad
+};
+
+// Cache to reduce lag
 let cache = {
     lastChatLen: -1,
     lastStats: null,
@@ -42,7 +49,7 @@ const stripHtmlToText = (html) => {
 // 2. HOOKS
 // =================================================================
 const optimizePayload = (data) => {
-    // Reset cache on new message so we recalculate
+    // Reset cache
     cache.lastChatLen = -1; 
     
     const processText = (text) => {
@@ -64,26 +71,23 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR (Optimized)
+// 3. CALCULATOR
 // =================================================================
 const findMaxContext = (contextObj) => {
     let max = 0;
     if (contextObj.max_context && contextObj.max_context > 0) max = parseInt(contextObj.max_context);
-    else if (typeof SillyTavern !== 'undefined') {
-        if (SillyTavern.settings?.context_size) max = parseInt(SillyTavern.settings.context_size);
+    else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) {
+        max = parseInt(SillyTavern.settings.context_size);
     }
     if (max === 0 && typeof window.settings !== 'undefined' && window.settings.context_size) {
         max = parseInt(window.settings.context_size);
     }
-    if (max === 0) {
-        // Fallback default
-        max = 4096; 
-    }
+    // Fallback default
+    if (max === 0) max = 4096; 
     return max;
 };
 
 const calculateStats = () => {
-    // 1. Get Chat Data
     let chat = [];
     let context = {};
     if (typeof SillyTavern !== 'undefined') {
@@ -93,15 +97,13 @@ const calculateStats = () => {
 
     if (!chat || chat.length === 0) return { savedTokens: 0, rangeLabel: "Waiting...", max: 0, totalMsgs: 0, currentLoad: 0 };
 
-    // 2. Check Cache (Anti-Lag Optimization)
-    // If chat length hasn't changed, reuse the hard calculations, just update the Range label based on potentially changed Max Context
     const maxTokens = findMaxContext(context);
     
+    // Check Cache
     if (chat.length === cache.lastChatLen && cache.lastStats && maxTokens === cache.lastContextMax) {
         return cache.lastStats;
     }
 
-    // 3. Heavy Calculation (Only runs if needed)
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => {
         if (!text) return 0;
@@ -114,7 +116,6 @@ const calculateStats = () => {
 
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
-        // Simple caching for individual messages could go here, but length check is usually enough
         let rawCount = quickCount(rawMsg);
         let cleanCount = 0;
         if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
@@ -131,7 +132,6 @@ const calculateStats = () => {
     let currentTotalUsage = context.tokens || 0;
     if (currentTotalUsage === 0) currentTotalUsage = messageTokensArray.reduce((a,b)=>a+b, 0);
 
-    // Range Calculation
     let rangeLabel = "Calculating...";
     let startIndex = 0;
     let endIndex = chat.length - 1;
@@ -148,7 +148,6 @@ const calculateStats = () => {
     }
     rangeLabel = `#${startIndex} ➔ #${endIndex}`;
 
-    // Update Cache
     const result = {
         savedTokens: totalSaved,
         rangeLabel: rangeLabel,
@@ -165,69 +164,76 @@ const calculateStats = () => {
 };
 
 // =================================================================
-// 4. NUMPAD FUNCTIONS
+// 4. INTERACTION FUNCTIONS (Updates State)
 // =================================================================
+window.toggleNumpad = () => {
+    uiState.showNumpad = !uiState.showNumpad;
+    renderInspector();
+};
+
 window.numpadType = (num) => {
-    const input = document.getElementById('chronos-search-id-display');
-    if (!input) return;
-    let current = input.innerText;
+    let current = uiState.numpadValue;
     if (current === "ID...") current = "";
-    if (current.length < 5) { // Limit length
-        input.innerText = current + num;
-        input.style.color = "#fff";
+    if (current.length < 5) {
+        uiState.numpadValue = current + num;
+        renderInspector();
     }
 };
 
 window.numpadDel = () => {
-    const input = document.getElementById('chronos-search-id-display');
-    if (!input) return;
-    let current = input.innerText;
+    let current = uiState.numpadValue;
     if (current === "ID..." || current.length === 0) return;
-    input.innerText = current.slice(0, -1);
-    if (input.innerText === "") {
-        input.innerText = "ID...";
-        input.style.color = "#666";
-    }
+    uiState.numpadValue = current.slice(0, -1);
+    if (uiState.numpadValue === "") uiState.numpadValue = "ID...";
+    renderInspector();
 };
 
 window.numpadGo = () => {
-    const input = document.getElementById('chronos-search-id-display');
-    if (!input) return;
-    const val = input.innerText;
+    const val = uiState.numpadValue;
     if (val === "ID..." || val === "") return;
-    
     const id = parseInt(val);
-    window.searchById(id);
+    window.setViewingId(id);
+};
+
+window.setViewingId = (id) => {
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    else if (typeof window.chat !== 'undefined') chat = window.chat;
+
+    if (isNaN(id) || id < 0 || id >= chat.length) {
+        // Optional: blink error
+        return;
+    }
+    
+    uiState.viewingId = id;
+    renderInspector(); // Trigger immediate re-render
+};
+
+window.closeViewer = () => {
+    uiState.viewingId = null;
+    renderInspector();
 };
 
 // =================================================================
-// 5. UI RENDERER
+// 5. UI RENDERER (State Based)
 // =================================================================
 const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
-    // Preserve Numpad Input State
-    const oldInput = document.getElementById('chronos-search-id-display');
-    const prevInputVal = oldInput ? oldInput.innerText : "ID...";
-    const prevColor = oldInput ? oldInput.style.color : "#666";
-
-    // Preserve Scroll
-    const msgListEl = ins.querySelector('.msg-list');
-    const prevScrollTop = msgListEl ? msgListEl.scrollTop : 0;
-
+    // Get Data
     let chat = [];
     if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
     else if (typeof window.chat !== 'undefined') chat = window.chat;
 
     const stats = calculateStats();
-    
-    // Percent Safety
     let percent = 0;
     if (stats.max > 0) percent = Math.min((stats.currentLoad / stats.max) * 100, 100);
-    
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
+    // --- HTML CONSTRUCTION ---
+    
+    // 1. Message List
     let listHtml = "";
     if (chat && chat.length > 0) {
         listHtml = chat.slice(-5).reverse().map((msg, i) => {
@@ -235,15 +241,66 @@ const renderInspector = () => {
             const cleanContent = msg.mes || "";
             const preview = cleanContent.substring(0, 20).replace(/</g, '&lt;');
             const roleIcon = msg.is_user ? '👤' : '🤖';
-            return `<div class="msg-item" onclick="viewAIVersion(${actualIdx})">
+            // Note: calling setViewingId instead of direct DOM manipulation
+            return `<div class="msg-item" onclick="setViewingId(${actualIdx})">
                         <span style="color:#D500F9;">#${actualIdx}</span> ${roleIcon} ${preview}...
                     </div>`;
         }).join('');
     }
 
+    // 2. Numpad HTML (Conditional)
+    let numpadHtml = "";
+    if (uiState.showNumpad) {
+        const displayColor = uiState.numpadValue === "ID..." ? "#666" : "#fff";
+        numpadHtml = `
+            <div class="numpad-wrapper">
+                <div class="numpad-display" style="color:${displayColor}">${uiState.numpadValue}</div>
+                <div class="numpad-grid">
+                    <button class="num-btn" onclick="numpadType(1)">1</button>
+                    <button class="num-btn" onclick="numpadType(2)">2</button>
+                    <button class="num-btn" onclick="numpadType(3)">3</button>
+                    <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
+                    <button class="num-btn" onclick="numpadType(4)">4</button>
+                    <button class="num-btn" onclick="numpadType(5)">5</button>
+                    <button class="num-btn" onclick="numpadType(6)">6</button>
+                    <button class="num-btn go-btn" onclick="numpadGo()">GO</button>
+                    <button class="num-btn" onclick="numpadType(7)">7</button>
+                    <button class="num-btn" onclick="numpadType(8)">8</button>
+                    <button class="num-btn" onclick="numpadType(9)">9</button>
+                    <button class="num-btn" onclick="numpadType(0)">0</button>
+                </div>
+            </div>
+        `;
+    }
+
+    // 3. View Content HTML (Conditional Persistence)
+    let viewerHtml = "";
+    if (uiState.viewingId !== null) {
+        const msg = chat[uiState.viewingId];
+        if (msg) {
+            let cleanText = stripHtmlToText(msg.mes);
+            let aiViewText = msg.mes; 
+            if (/<[^>]+>|&lt;[^&]+&gt;/.test(msg.mes)) {
+                aiViewText = `[System Content:\n${cleanText}]`;
+            }
+            viewerHtml = `
+                <div class="viewer-container">
+                    <div class="viewer-header">
+                        <span style="color:#D500F9;">#${uiState.viewingId} Content</span>
+                        <button class="close-btn" onclick="closeViewer()">CLOSE</button>
+                    </div>
+                    <div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>
+                </div>
+            `;
+        }
+    }
+
+    // --- RENDER ---
+    const scrollPos = ins.querySelector('.ins-body') ? ins.querySelector('.ins-body').scrollTop : 0;
+
     ins.innerHTML = `
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.15</span>
+            <span>🚀 CHRONOS V66.16</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
         </div>
         
@@ -267,49 +324,30 @@ const renderInspector = () => {
                 <div class="progress-bar" style="width: ${percent}%"></div>
             </div>
             
-            <div style="text-align:right; font-size:9px; color:#aaa; margin-top:3px;">
-                📚 Total Messages: <span style="color:#fff;">${fmt(stats.totalMsgs)}</span>
+            <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-top:5px;">
+                <button class="toggle-numpad-btn" onclick="toggleNumpad()">
+                    ${uiState.showNumpad ? '🔽 Hide Keypad' : '🔢 ID Search'}
+                </button>
+                <div style="font-size:9px; color:#aaa;">📚 Total: <span style="color:#fff;">${fmt(stats.totalMsgs)}</span></div>
             </div>
         </div>
 
         <div class="ins-body">
-            <div style="background:#1a1a1a; padding:10px; border-radius:5px; margin-bottom:10px; border:1px solid #333;">
-                <div id="chronos-search-id-display" style="background:#000; color:${prevColor}; padding:8px; text-align:right; font-size:16px; font-family:monospace; border-radius:3px; margin-bottom:8px; border:1px solid #444; height:36px; display:flex; align-items:center; justify-content:flex-end;">${prevInputVal}</div>
-                
-                <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px;">
-                    <button class="num-btn" onclick="numpadType(1)">1</button>
-                    <button class="num-btn" onclick="numpadType(2)">2</button>
-                    <button class="num-btn" onclick="numpadType(3)">3</button>
-                    <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
-
-                    <button class="num-btn" onclick="numpadType(4)">4</button>
-                    <button class="num-btn" onclick="numpadType(5)">5</button>
-                    <button class="num-btn" onclick="numpadType(6)">6</button>
-                    <button class="num-btn go-btn" onclick="numpadGo()" style="grid-row: span 2;">GO</button>
-
-                    <button class="num-btn" onclick="numpadType(7)">7</button>
-                    <button class="num-btn" onclick="numpadType(8)">8</button>
-                    <button class="num-btn" onclick="numpadType(9)">9</button>
-
-                    <button class="num-btn" onclick="numpadType(0)" style="grid-column: span 3;">0</button>
-                </div>
-            </div>
+            ${numpadHtml}
+            ${viewerHtml}
             
-            <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase;">Recent Messages</div>
+            <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase; margin-top:5px;">Recent Messages</div>
             <div class="msg-list">${listHtml}</div>
-            
-            <div id="view-target-wrapper">
-                <div id="view-target-content"></div>
-            </div>
         </div>
     `;
 
-    const newMsgListEl = ins.querySelector('.msg-list');
-    if (newMsgListEl) newMsgListEl.scrollTop = prevScrollTop;
+    // Restore scroll if needed (though layout changes might make this jumpy, it's better than reset)
+    // const bodyEl = ins.querySelector('.ins-body');
+    // if(bodyEl) bodyEl.scrollTop = scrollPos;
 };
 
 // =================================================================
-// 6. STYLES (Updated for Numpad)
+// 6. STYLES
 // =================================================================
 const injectStyles = () => {
     const exist = document.getElementById('chronos-style');
@@ -360,27 +398,37 @@ const injectStyles = () => {
         .msg-list { max-height: 120px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #0a0a0a; border-radius: 4px; }
         .msg-item { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; transition: 0.2s;}
         .msg-item:hover { background: #330044; color: #fff; padding-left: 10px;}
+
+        /* Buttons */
+        .toggle-numpad-btn { background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 2px 8px; font-size: 10px; cursor: pointer; }
+        .toggle-numpad-btn:hover { background: #555; }
         
-        /* NUMPAD STYLES */
-        .num-btn { background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 8px; cursor: pointer; font-weight: bold; transition: 0.1s; }
-        .num-btn:active { background: #D500F9; color: #fff; transform: scale(0.95); }
-        .del-btn { color: #ff4081; border-color: #550022; }
-        .go-btn { background: #00E676; color: #000; border-color: #00b359; display:flex; align-items:center; justify-content:center; }
-        
-        #view-target-wrapper { margin-top:10px; border-top:1px dashed #444; padding-top:10px; display:none; animation: fade-in 0.3s; }
-        .view-area { background: #080808; color: #00E676; padding: 10px; height: 140px; overflow-y: auto; border: 1px solid #333; border-radius: 4px; margin-top: 5px; white-space: pre-wrap; word-wrap: break-word; }
-        
+        /* Numpad */
+        .numpad-wrapper { background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px; border: 1px solid #333; animation: fade-in 0.2s; }
+        .numpad-display { background: #000; padding: 4px; text-align: right; font-family: monospace; border: 1px solid #444; margin-bottom: 5px; height: 20px; display:flex; align-items:center; justify-content:flex-end; color: #fff;}
+        .numpad-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
+        .num-btn { background: #2a2a2a; color: #ccc; border: 1px solid #444; border-radius: 3px; padding: 6px; font-size: 11px; cursor: pointer; }
+        .num-btn:active { background: #D500F9; color: #fff; }
+        .del-btn { color: #ff4081; }
+        .go-btn { background: #00E676; color: #000; font-weight:bold; }
+
+        /* Viewer */
+        .viewer-container { margin-bottom: 10px; border: 1px solid #D500F9; border-radius: 4px; background: #080808; overflow: hidden; animation: fade-in 0.2s; }
+        .viewer-header { background: #1a0520; padding: 5px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .close-btn { background: #ff4081; color: #fff; border: none; font-size: 9px; padding: 2px 6px; border-radius: 2px; cursor: pointer; }
+        .view-area { padding: 8px; height: 120px; overflow-y: auto; color: #00E676; white-space: pre-wrap; word-wrap: break-word; font-size: 11px; }
+
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #111; }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #D500F9; }
-        @keyframes fade-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     `;
     document.head.appendChild(style);
 };
 
 // =================================================================
-// 7. UTILS & INIT
+// 7. INIT
 // =================================================================
 window.toggleDrag = (type, isChecked) => {
     if (type === 'orb') dragConfig.orbUnlocked = isChecked;
@@ -421,41 +469,8 @@ const makeDraggable = (elm, type) => {
     elm.onmousedown = dragStart; elm.ontouchstart = dragStart;
 };
 
-window.searchById = (id) => {
-    let chat = [];
-    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
-    else if (typeof window.chat !== 'undefined') chat = window.chat;
-    
-    if (isNaN(id) || id < 0 || id >= chat.length) { 
-        // flash error visual could go here
-        return; 
-    }
-    viewAIVersion(id);
-};
-
-window.viewAIVersion = (index) => {
-    let chat = [];
-    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
-    else if (typeof window.chat !== 'undefined') chat = window.chat;
-    
-    const msg = chat[index];
-    if (!msg) return;
-    
-    const wrapper = document.getElementById('view-target-wrapper');
-    if (wrapper) wrapper.style.display = 'block';
-    const contentDiv = document.getElementById('view-target-content');
-    if (!contentDiv) return;
-    
-    let cleanText = stripHtmlToText(msg.mes);
-    let aiViewText = msg.mes; 
-    if (/<[^>]+>|&lt;[^&]+&gt;/.test(msg.mes)) {
-        aiViewText = `[System Content:\n${cleanText}]`;
-    }
-    contentDiv.innerHTML = `<div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>`;
-};
-
 const createUI = () => {
-    const oldOrb = document.getElementById('chronos-orb');if (oldOrb) oldOrb.remove();
+    const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
     const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
     const ins = document.createElement('div'); ins.id = 'chronos-inspector';
@@ -477,7 +492,6 @@ const createUI = () => {
     }
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
-        // Only render if visible (Saves battery/CPU)
         if (ins && ins.style.display === 'block') renderInspector();
     }, 2000);
 })();
