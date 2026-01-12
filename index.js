@@ -1,11 +1,10 @@
 // index.js - Chronos V66.25 (Ultimate Expanded Edition) 🌌
-// Features: Full Character System, Route Memory, Cyberpunk UI
-// Status: Fully Expanded Code (No Minification)
+// Part 1: Config, State & Storage
 
 const extensionName = "Chronos_Ultimate_V25";
 
 // =================================================================
-// 0. HIDDEN PROMPTS & CONFIG
+// 0. HIDDEN PROMPTS
 // =================================================================
 
 // Prompt สำหรับสรุปเนื้อเรื่อง (ทำงานเบื้องหลัง)
@@ -39,7 +38,7 @@ let uiState = {
     viewingId: null,
     numpadValue: "ID...",
     isPanelBuilt: false,
-    friendMode: false,      // สลับหน้าจอ System
+    friendMode: false,       // สลับหน้าจอ System
     showCharSettings: false, // เปิดหน้าตั้งค่าตัวละคร
     chatMode: 'group',       // 'group' หรือ 'route'
     selectedCharId: null,    // ID ตัวละครที่เลือก
@@ -111,6 +110,8 @@ const stripHtmlToText = (html) => {
                .trim();
     return text;
 };
+
+// index.js - Part 2: Logic Core
 
 // =================================================================
 // 2. HOOKS
@@ -213,6 +214,7 @@ const calculateStats = () => {
 
     let rangeLabel = "...";
     let startIndex = 0;
+    let endIndex = chat.length - 1;
     let accumulated = 0;
     
     for (let i = chat.length - 1; i >= 0; i--) {
@@ -224,7 +226,7 @@ const calculateStats = () => {
             break;
         }
     }
-    rangeLabel = `#${startIndex} ➔ #${chat.length - 1}`;
+    rangeLabel = `#${startIndex} ➔ #${endIndex}`;
 
     return {
         savedTokens: totalSaved,
@@ -234,6 +236,8 @@ const calculateStats = () => {
         currentLoad: currentTotalUsage
     };
 };
+
+// index.js - Part 3: Interaction & Chat System
 
 // =================================================================
 // 4. INTERACTION & SYSTEM LOGIC
@@ -402,6 +406,8 @@ window.sendFriendMsg = async () => {
     }
     log.scrollTop = log.scrollHeight;
 };
+            
+// index.js - Part 4: UI Renderer
 
 // =================================================================
 // 5. CORE RENDERER (UI GENERATION)
@@ -560,7 +566,9 @@ const updateUI = () => {
 
 const renderListSection = () => {
     const container = document.getElementById('section-list');
-    let chat = SillyTavern.getContext()?.chat || [];
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    
     if (chat.length > 0) {
         container.innerHTML = chat.slice(-5).reverse().map((msg, i) => {
             const idx = chat.length - 1 - i;
@@ -593,6 +601,8 @@ const renderViewerSection = () => {
     }
 };
 
+// index.js - Part 5: Styles & Init (Fixed Mobile Dragging)
+
 // =================================================================
 // 6. STYLES & INIT
 // =================================================================
@@ -604,6 +614,7 @@ const injectStyles = () => {
     const style = document.createElement('style');
     style.id = 'chronos-style';
     style.innerHTML = `
+        /* --- ORB (ลูกแก้ว) --- */
         #chronos-orb {
             position: fixed;
             top: 150px;
@@ -614,7 +625,7 @@ const injectStyles = () => {
             border: 2px solid #D500F9;
             border-radius: 50%;
             z-index: 2147483647;
-            cursor: pointer;
+            cursor: move;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -622,6 +633,10 @@ const injectStyles = () => {
             color: #E040FB;
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6);
             animation: spin-slow 4s linear infinite;
+            
+            /* Fixed Mobile Dragging */
+            touch-action: none; 
+            user-select: none;
         }
 
         @keyframes spin-slow {
@@ -629,6 +644,7 @@ const injectStyles = () => {
             100% { transform: rotate(360deg); }
         }
 
+        /* --- MAIN WINDOW --- */
         #chronos-inspector {
             position: fixed;
             top: 80px;
@@ -680,6 +696,8 @@ const injectStyles = () => {
             display: flex;
             justify-content: space-between;
             border-bottom: 1px solid #D500F9;
+            touch-action: none;
+            user-select: none;
         }
 
         .control-zone {
@@ -956,7 +974,7 @@ const injectStyles = () => {
 };
 
 // =================================================================
-// 7. INITIALIZATION
+// 7. INITIALIZATION (Fixed Drag Logic)
 // =================================================================
 const createUI = () => {
     const oldOrb = document.getElementById('chronos-orb');
@@ -998,8 +1016,10 @@ const makeDraggable = (elm, type) => {
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
         
-        const clientX = e.clientX || e.touches[0].clientX; 
-        const clientY = e.clientY || e.touches[0].clientY;
+        // Get coordinates (Touch compatible)
+        const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
+        const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
+        
         pos3 = clientX; 
         pos4 = clientY;
         
@@ -1012,8 +1032,8 @@ const makeDraggable = (elm, type) => {
     };
     
     const dragAction = (e) => {
-        const clientX = e.clientX || e.touches[0].clientX; 
-        const clientY = e.clientY || e.touches[0].clientY;
+        const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
+        const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
         
         pos1 = pos3 - clientX; 
         pos2 = pos4 - clientY; 
@@ -1022,7 +1042,9 @@ const makeDraggable = (elm, type) => {
         
         elm.style.top = (elm.offsetTop - pos2) + "px"; 
         elm.style.left = (elm.offsetLeft - pos1) + "px";
-        e.preventDefault();
+        
+        // Prevent Mobile Scroll
+        if(e.cancelable) e.preventDefault();
     };
     
     const dragEnd = () => {
@@ -1040,7 +1062,7 @@ const makeDraggable = (elm, type) => {
     elm.ontouchstart = dragStart;
 };
 
-// Start the Extension
+// Start Extension
 (function() {
     injectStyles();
     
@@ -1051,7 +1073,6 @@ const makeDraggable = (elm, type) => {
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
     }
     
-    // Loop updates
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && (ins.style.display === 'block' || ins.style.display === 'flex')) {
@@ -1060,8 +1081,4 @@ const makeDraggable = (elm, type) => {
     }, 2000);
 })();
 
-
-
-
-
-
+                                                                                                                                                                                                                                                                                                                                                                                        
