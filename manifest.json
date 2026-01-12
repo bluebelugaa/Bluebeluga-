@@ -6,7 +6,7 @@
     "version": "2.1.0",
     "icon": "fa-clock",
     "description": "Chronos Time Saver + Friend Side Chat System",
-    "js": "index.js,side_chat.js", 
+    "js": ["index.js", "side_chat.js"],
     "type": "extension",
     "loading_order": 1
 }
