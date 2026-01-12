@@ -1,13 +1,13 @@
-// index.js - Chronos V66.25 (Ultimate Expanded Edition) 🌌
-// Part 1: Config, State & Storage
+// index.js - Chronos V66.27 (Ultimate Expanded - No Minification) 🌌
+// Features: Touch Fix, Active Glow, Full Character System
+// Status: Fully Expanded Line-by-Line
 
-const extensionName = "Chronos_Ultimate_V25";
+const extensionName = "Chronos_Ultimate_V27";
 
 // =================================================================
 // 0. HIDDEN PROMPTS
 // =================================================================
 
-// Prompt สำหรับสรุปเนื้อเรื่อง (ทำงานเบื้องหลัง)
 const HIDDEN_SUMMARY_PROMPT = `
 [Instruction]: You are a "Narrative Archivist". Your job is to analyze the conversation history and summarize the current "Plot Route" and "Relationship Status".
 1. Identify the current romantic or storyline route (e.g., Drama, Fluff, Enemies-to-Lovers).
@@ -16,7 +16,6 @@ const HIDDEN_SUMMARY_PROMPT = `
 Output Format: "Route: [Type] | Status: [Summary]" - Keep it concise.
 `;
 
-// Base Prompt สำหรับระบบเพื่อน
 const BASE_FRIEND_PROMPT = `
 [Usage]: Always active. Use HTML format.
 You are roleplaying as the specific characters defined by the user.
@@ -28,6 +27,7 @@ You are roleplaying as the specific characters defined by the user.
 // =================================================================
 // 1. STATE & STORAGE MANAGEMENT
 // =================================================================
+
 let dragConfig = {
     orbUnlocked: false,
     panelUnlocked: false
@@ -38,28 +38,40 @@ let uiState = {
     viewingId: null,
     numpadValue: "ID...",
     isPanelBuilt: false,
-    friendMode: false,       // สลับหน้าจอ System
-    showCharSettings: false, // เปิดหน้าตั้งค่าตัวละคร
-    chatMode: 'group',       // 'group' หรือ 'route'
-    selectedCharId: null,    // ID ตัวละครที่เลือก
-    editingCharId: null      // ID ตัวละครที่กำลังแก้
+    friendMode: false,
+    showCharSettings: false,
+    chatMode: 'group',
+    selectedCharId: null,
+    editingCharId: null
 };
 
-// โครงสร้างข้อมูล (โหลดจาก LocalStorage)
+// Data Structure (Loaded from Storage)
 let globalData = {
     characters: [
-        { id: 1, name: "Kirin", color: "#C5A059", personality: "Cold, Observer, Loves Operator." },
-        { id: 2, name: "WhiteCat", color: "#f0f0f0", personality: "Jealous, Possessive, Mocking." }
+        { 
+            id: 1, 
+            name: "Kirin", 
+            color: "#C5A059", 
+            personality: "Cold, Observer, Loves Operator." 
+        },
+        { 
+            id: 2, 
+            name: "WhiteCat", 
+            color: "#f0f0f0", 
+            personality: "Jealous, Possessive, Mocking." 
+        }
     ],
     routes: {
-        "default": { summary: "New timeline started.", plot: "None" }
+        "default": { 
+            summary: "New timeline started.", 
+            plot: "None" 
+        }
     },
     currentRouteId: "default"
 };
 
 let friendChatHistory = []; 
 
-// Cache เพื่อลดภาระเครื่อง
 let lastRenderData = {
     saved: -1,
     range: "",
@@ -70,6 +82,7 @@ let lastRenderData = {
 };
 
 // --- Storage Functions ---
+
 const loadGlobalData = () => {
     const saved = localStorage.getItem('chronos_global_db_v1');
     if (saved) {
@@ -81,10 +94,11 @@ const saveGlobalData = () => {
     localStorage.setItem('chronos_global_db_v1', JSON.stringify(globalData));
 };
 
-// Load ทันทีที่เริ่มทำงาน
+// Load immediately
 loadGlobalData();
 
 // --- Helpers ---
+
 const getChronosTokenizer = () => {
     try {
         if (typeof SillyTavern !== 'undefined' && SillyTavern.Tokenizers) {
@@ -99,15 +113,20 @@ const getChronosTokenizer = () => {
 };
 
 const stripHtmlToText = (html) => {
-    if (!html) return "";
+    if (!html) {
+        return "";
+    }
+    
     let text = html.replace(/<br\s*\/?>/gi, '\n')
                    .replace(/<\/p>/gi, '\n\n')
                    .replace(/<\/div>/gi, '\n')
                    .replace(/<\/h[1-6]>/gi, '\n');
+                   
     text = text.replace(/<[^>]+>/g, '')
                .replace(/&lt;[^&]+&gt;/g, '')
                .replace(/\n\s*\n/g, '\n\n')
                .trim();
+               
     return text;
 };
 
@@ -116,6 +135,7 @@ const stripHtmlToText = (html) => {
 // =================================================================
 // 2. HOOKS
 // =================================================================
+
 const optimizePayload = (data) => {
     const processText = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) {
@@ -125,12 +145,14 @@ const optimizePayload = (data) => {
     };
 
     if (data.body?.messages) {
-        data.body.messages.forEach(msg => msg.content = processText(msg.content));
+        data.body.messages.forEach(msg => {
+            msg.content = processText(msg.content);
+        });
     } else if (data.body?.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
     
-    // Force list refresh
+    // Force list refresh after a delay
     setTimeout(() => {
         lastRenderData.msgCount = -1; 
         updateUI();
@@ -142,8 +164,10 @@ const optimizePayload = (data) => {
 // =================================================================
 // 3. CALCULATOR
 // =================================================================
+
 const findMaxContext = (contextObj) => {
     let max = 0;
+    
     if (contextObj.max_context && contextObj.max_context > 0) {
         max = parseInt(contextObj.max_context);
     } else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) {
@@ -157,6 +181,7 @@ const findMaxContext = (contextObj) => {
     if (max === 0) {
         max = 4096;
     }
+    
     return max;
 };
 
@@ -172,14 +197,22 @@ const calculateStats = () => {
     }
 
     if (!chat || chat.length === 0) {
-        return { savedTokens: 0, rangeLabel: "Waiting...", max: 0, totalMsgs: 0, currentLoad: 0 };
+        return { 
+            savedTokens: 0, 
+            rangeLabel: "Waiting...", 
+            max: 0, 
+            totalMsgs: 0, 
+            currentLoad: 0 
+        };
     }
 
     const maxTokens = findMaxContext(context);
     const tokenizer = getChronosTokenizer();
     
     const quickCount = (text) => {
-        if (!text) return 0;
+        if (!text) {
+            return 0;
+        }
         if (tokenizer && typeof tokenizer.encode === 'function') {
             return tokenizer.encode(text).length;
         }
@@ -198,18 +231,20 @@ const calculateStats = () => {
             const cleanText = stripHtmlToText(rawMsg);
             const formattedClean = `[System Content:\n${cleanText}]`;
             cleanCount = quickCount(formattedClean);
+            
             if (rawCount > cleanCount) {
                 totalSaved += (rawCount - cleanCount);
             }
         } else {
             cleanCount = rawCount;
         }
+        
         messageTokensArray.push(cleanCount);
     });
 
     let currentTotalUsage = context.tokens || 0;
     if (currentTotalUsage === 0) {
-        currentTotalUsage = messageTokensArray.reduce((a,b)=>a+b, 0);
+        currentTotalUsage = messageTokensArray.reduce((a,b) => a + b, 0);
     }
 
     let rangeLabel = "...";
@@ -226,6 +261,7 @@ const calculateStats = () => {
             break;
         }
     }
+    
     rangeLabel = `#${startIndex} ➔ #${endIndex}`;
 
     return {
@@ -236,31 +272,86 @@ const calculateStats = () => {
         currentLoad: currentTotalUsage
     };
 };
-
 // index.js - Part 3: Interaction & Chat System
 
 // =================================================================
-// 4. INTERACTION & SYSTEM LOGIC
+// 4. INTERACTION
 // =================================================================
 
-// --- Standard Controls ---
-window.toggleNumpad = () => { uiState.showNumpad = !uiState.showNumpad; renderNumpadSection(); };
-window.numpadType = (n) => { if(uiState.numpadValue==="ID...") uiState.numpadValue=""; if(uiState.numpadValue.length<5) { uiState.numpadValue+=n; updateNumpadDisplay(); }};
-window.numpadDel = () => { if(uiState.numpadValue!=="ID..." && uiState.numpadValue.length>0) uiState.numpadValue=uiState.numpadValue.slice(0,-1); if(uiState.numpadValue==="") uiState.numpadValue="ID..."; updateNumpadDisplay(); };
-window.numpadGo = () => { if(uiState.numpadValue!=="ID...") window.setViewingId(parseInt(uiState.numpadValue)); };
+window.toggleNumpad = () => {
+    uiState.showNumpad = !uiState.showNumpad;
+    renderNumpadSection(); 
+};
+
+window.numpadType = (num) => {
+    let current = uiState.numpadValue;
+    if (current === "ID...") {
+        current = "";
+    }
+    
+    if (current.length < 5) {
+        uiState.numpadValue = current + num;
+        updateNumpadDisplay();
+    }
+};
+
+window.numpadDel = () => {
+    let current = uiState.numpadValue;
+    if (current === "ID..." || current.length === 0) {
+        return;
+    }
+    
+    uiState.numpadValue = current.slice(0, -1);
+    
+    if (uiState.numpadValue === "") {
+        uiState.numpadValue = "ID...";
+    }
+    updateNumpadDisplay();
+};
+
+window.numpadGo = () => {
+    const val = uiState.numpadValue;
+    if (val === "ID..." || val === "") {
+        return;
+    }
+    
+    const id = parseInt(val);
+    window.setViewingId(id);
+};
 
 window.setViewingId = (id) => {
     let chat = SillyTavern.getContext()?.chat || [];
-    if (isNaN(id) || id < 0 || id >= chat.length) return;
+    
+    if (isNaN(id) || id < 0 || id >= chat.length) {
+        return;
+    }
+    
     uiState.viewingId = id;
     renderViewerSection();
     renderListSection();
 };
 
-window.closeViewer = () => { uiState.viewingId=null; renderViewerSection(); renderListSection(); };
-window.closePanel = () => { document.getElementById('chronos-inspector').style.display = 'none'; };
+window.closeViewer = () => {
+    uiState.viewingId = null;
+    renderViewerSection();
+    renderListSection();
+};
+
+window.closePanel = () => { 
+    const ins = document.getElementById('chronos-inspector');
+    const orb = document.getElementById('chronos-orb');
+    
+    if (ins) {
+        ins.style.display = 'none';
+    }
+    
+    if (orb) {
+        orb.classList.remove('active'); 
+    }
+};
 
 // --- Character Settings Logic ---
+
 window.toggleCharSettings = () => {
     uiState.showCharSettings = !uiState.showCharSettings;
     renderFriendBody();
@@ -273,7 +364,12 @@ window.saveNewCharacter = () => {
     
     if (name && desc) {
         const newId = Date.now();
-        globalData.characters.push({ id: newId, name, color, personality: desc });
+        globalData.characters.push({ 
+            id: newId, 
+            name: name, 
+            color: color, 
+            personality: desc 
+        });
         saveGlobalData();
         renderFriendBody();
     }
@@ -292,6 +388,7 @@ window.setChatMode = (mode, charId = null) => {
 };
 
 // --- Hidden Summary Logic ---
+
 const generateHiddenSummary = async (chatText) => {
     try {
         if (typeof SillyTavern.Generate === 'function') {
@@ -299,34 +396,46 @@ const generateHiddenSummary = async (chatText) => {
                 { role: 'system', content: HIDDEN_SUMMARY_PROMPT },
                 { role: 'user', content: `Analyze this chat: ${chatText}` }
             ];
+            
             const result = await SillyTavern.Generate(summaryPayload, { quiet: true });
             
-            globalData.routes[globalData.currentRouteId] = {
-                summary: result,
-                timestamp: Date.now()
+            globalData.routes[globalData.currentRouteId] = { 
+                summary: result, 
+                timestamp: Date.now() 
             };
+            
             saveGlobalData();
-            console.log("Chronos Summary:", result);
         }
-    } catch(e) {
-        console.error("Summary Failed:", e);
+    } catch(e) { 
+        console.error("Summary Failed:", e); 
     }
 };
 
 // --- Tab Switching Logic ---
+
 window.toggleTabMode = () => {
     uiState.friendMode = !uiState.friendMode;
+    
     const normalView = document.getElementById('view-normal');
     const friendView = document.getElementById('view-friend');
     const controls = document.getElementById('panel-controls');
     const tabBtn = document.getElementById('holo-tab-btn');
 
     if (normalView && friendView) {
-        normalView.style.display = uiState.friendMode ? 'none' : 'block';
-        friendView.style.display = uiState.friendMode ? 'flex' : 'none';
+        if (uiState.friendMode) {
+            normalView.style.display = 'none';
+            friendView.style.display = 'flex';
+        } else {
+            normalView.style.display = 'block';
+            friendView.style.display = 'none';
+        }
         
         if (controls) {
-            controls.style.display = uiState.friendMode ? 'none' : 'flex';
+            if (uiState.friendMode) {
+                controls.style.display = 'none';
+            } else {
+                controls.style.display = 'flex';
+            }
         }
         
         if (uiState.friendMode) {
@@ -336,7 +445,7 @@ window.toggleTabMode = () => {
 
     if (tabBtn) {
         tabBtn.innerText = uiState.friendMode ? 'STATS' : 'SYSTEM';
-        tabBtn.style.color = uiState.friendMode ? '#00E676' : '#00E676';
+        tabBtn.style.color = '#00E676';
         
         if (uiState.friendMode) {
              tabBtn.style.boxShadow = '0 -5px 15px rgba(0, 230, 118, 0.4)';
@@ -350,17 +459,24 @@ window.sendFriendMsg = async () => {
     const input = document.getElementById('friend-input');
     const log = document.getElementById('friend-log');
     const txt = input.value.trim();
+    
     if (!txt) return;
+    
     input.value = ''; 
 
+    // Show User Message
     log.innerHTML += `<div style="margin-bottom:6px; text-align:right; padding:6px; background:#333; border-radius:4px; color:#aaa;"><b>Op:</b> ${txt}</div>`;
+    
     friendChatHistory.push({ role: 'user', content: `[message] ${txt}` });
+    
     log.scrollTop = log.scrollHeight;
 
+    // Trigger Summary
     generateHiddenSummary(txt);
 
     // Build Prompt
     let dynamicSystemPrompt = BASE_FRIEND_PROMPT + "\n\n[Active Characters]:\n";
+    
     if (uiState.chatMode === 'group') {
         globalData.characters.forEach(c => {
             dynamicSystemPrompt += `- Name: ${c.name} (Color: ${c.color})\n  Personality: ${c.personality}\n`;
@@ -398,15 +514,21 @@ window.sendFriendMsg = async () => {
         } else {
             reply = "⚠️ API Error.";
         }
+        
         document.getElementById(loadId).remove();
+        
         friendChatHistory.push({ role: 'assistant', content: reply });
+        
         log.innerHTML += `<div style="margin-bottom:10px; padding:5px; border-radius:4px;">${reply}</div>`;
+        
     } catch (e) {
         document.getElementById(loadId).innerText = "Error: " + e.message;
     }
+    
     log.scrollTop = log.scrollHeight;
 };
-            
+
+
 // index.js - Part 4: UI Renderer
 
 // =================================================================
@@ -420,7 +542,7 @@ const buildBaseUI = () => {
     ins.innerHTML = `
         <div id="holo-tab-btn" onclick="toggleTabMode()">SYSTEM</div>
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.25</span>
+            <span>🚀 CHRONOS V66.27</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
         </div>
         
@@ -481,8 +603,12 @@ const buildBaseUI = () => {
             </div>
         </div>
     `;
+    
     uiState.isPanelBuilt = true;
-    if(uiState.friendMode) renderFriendBody();
+    
+    if (uiState.friendMode) {
+        renderFriendBody();
+    }
 };
 
 const renderFriendBody = () => {
@@ -490,16 +616,21 @@ const renderFriendBody = () => {
     if (!container) return;
 
     if (uiState.showCharSettings) {
+        // --- SETTINGS UI ---
         let html = `<div style="padding:10px; color:#ddd;">`;
         html += `<div style="font-size:11px; color:#C5A059; margin-bottom:5px;">CHAT MODE</div>`;
         html += `<div style="display:flex; gap:5px; margin-bottom:15px;">`;
+        
+        // Group Button
         html += `<button onclick="setChatMode('group')" class="mode-btn ${uiState.chatMode==='group'?'active':''}">👥 Group</button>`;
         
+        // Route Buttons
         globalData.characters.forEach(c => {
              html += `<button onclick="setChatMode('route', ${c.id})" class="mode-btn ${uiState.chatMode==='route' && uiState.selectedCharId===c.id ? 'active' : ''}" style="border-color:${c.color}; color:${c.color}">${c.name}</button>`;
         });
         html += `</div>`;
 
+        // Character List
         html += `<div style="font-size:11px; color:#C5A059; margin-bottom:5px;">CHARACTERS</div>`;
         globalData.characters.forEach(c => {
             html += `<div class="char-row">
@@ -508,14 +639,18 @@ const renderFriendBody = () => {
             </div>`;
         });
 
+        // Add Form
         html += `<div style="margin-top:10px; padding-top:10px; border-top:1px dashed #444;">
             <input id="new-char-name" placeholder="Name" style="width:100%; margin-bottom:5px; background:#111; color:#fff; border:1px solid #333;">
             <input id="new-char-color" type="color" style="width:100%; height:25px; margin-bottom:5px; background:#111; border:none;">
             <textarea id="new-char-desc" placeholder="Personality/Details..." style="width:100%; height:50px; background:#111; color:#fff; border:1px solid #333;"></textarea>
             <button onclick="saveNewCharacter()" style="width:100%; background:#333; color:#fff; border:1px solid #555; cursor:pointer;">+ Add Character</button>
         </div></div>`;
+        
         container.innerHTML = html;
+        
     } else {
+        // --- CHAT LOG UI ---
         container.innerHTML = `<div id="friend-log" style="padding:10px; font-size:12px; color:#ccc; min-height:100%;">
             <div style="text-align:center; color:#555; margin-top:20px;">
                 <span style="color:#00E676">●</span> System Online<br>
@@ -528,9 +663,17 @@ const renderFriendBody = () => {
 
 const updateUI = () => {
     const ins = document.getElementById('chronos-inspector');
-    if (!ins || ins.style.display === 'none') return;
-    if (!uiState.isPanelBuilt || ins.innerHTML === "") buildBaseUI();
-    if (uiState.friendMode) return;
+    if (!ins || ins.style.display === 'none') {
+        return;
+    }
+    
+    if (!uiState.isPanelBuilt || ins.innerHTML === "") {
+        buildBaseUI();
+    }
+    
+    if (uiState.friendMode) {
+        return;
+    }
 
     const stats = calculateStats();
     const fmt = (n) => (n ? n.toLocaleString() : "0");
@@ -567,13 +710,16 @@ const updateUI = () => {
 const renderListSection = () => {
     const container = document.getElementById('section-list');
     let chat = [];
-    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    if (typeof SillyTavern !== 'undefined') {
+        chat = SillyTavern.getContext()?.chat || [];
+    }
     
     if (chat.length > 0) {
         container.innerHTML = chat.slice(-5).reverse().map((msg, i) => {
             const idx = chat.length - 1 - i;
             const isActive = (uiState.viewingId === idx);
             const activeClass = isActive ? 'msg-active' : ''; 
+            
             return `<div class="msg-item ${activeClass}" onclick="setViewingId(${idx})">
                         <span style="color:#D500F9;">#${idx}</span> ${msg.is_user?'👤':'🤖'} ${(msg.mes||"").substring(0,20).replace(/</g,'&lt;')}...
                     </div>`;
@@ -585,23 +731,71 @@ const renderListSection = () => {
 
 const renderNumpadSection = () => {
     const container = document.getElementById('section-numpad');
-    document.getElementById('btn-toggle-numpad').innerText = uiState.showNumpad ? '🔽 Hide' : '🔢 Search';
-    if (!uiState.showNumpad) { container.innerHTML = ""; return; }
-    container.innerHTML = `<div class="numpad-wrapper"><div class="numpad-display" id="numpad-screen" style="color:${uiState.numpadValue==="ID..."?"#666":"#fff"}">${uiState.numpadValue}</div><div class="numpad-grid">${[1,2,3].map(n=>`<button class="num-btn" onclick="numpadType(${n})">${n}</button>`).join('')}<button class="num-btn del-btn" onclick="numpadDel()">⌫</button>${[4,5,6].map(n=>`<button class="num-btn" onclick="numpadType(${n})">${n}</button>`).join('')}<button class="num-btn go-btn" onclick="numpadGo()">GO</button>${[7,8,9,0].map(n=>`<button class="num-btn" onclick="numpadType(${n})">${n}</button>`).join('')}</div></div>`;
+    const btn = document.getElementById('btn-toggle-numpad');
+    
+    if (btn) {
+        btn.innerText = uiState.showNumpad ? '🔽 Hide' : '🔢 Search';
+    }
+    
+    if (!uiState.showNumpad) {
+        container.innerHTML = "";
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="numpad-wrapper">
+            <div class="numpad-display" id="numpad-screen" style="color:${uiState.numpadValue==="ID..."?"#666":"#fff"}">${uiState.numpadValue}</div>
+            <div class="numpad-grid">
+                <button class="num-btn" onclick="numpadType(1)">1</button>
+                <button class="num-btn" onclick="numpadType(2)">2</button>
+                <button class="num-btn" onclick="numpadType(3)">3</button>
+                <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
+                <button class="num-btn" onclick="numpadType(4)">4</button>
+                <button class="num-btn" onclick="numpadType(5)">5</button>
+                <button class="num-btn" onclick="numpadType(6)">6</button>
+                <button class="num-btn go-btn" onclick="numpadGo()">GO</button>
+                <button class="num-btn" onclick="numpadType(7)">7</button>
+                <button class="num-btn" onclick="numpadType(8)">8</button>
+                <button class="num-btn" onclick="numpadType(9)">9</button>
+                <button class="num-btn" onclick="numpadType(0)">0</button>
+            </div>
+        </div>
+    `;
 };
-const updateNumpadDisplay = () => { const el = document.getElementById('numpad-screen'); if(el) { el.innerText = uiState.numpadValue; el.style.color = uiState.numpadValue==="ID..."?"#666":"#fff"; }};
-const renderViewerSection = () => {
-    const container = document.getElementById('section-viewer');
-    if (uiState.viewingId === null) { container.innerHTML = ""; return; }
-    let chat = SillyTavern.getContext()?.chat || [];
-    const msg = chat[uiState.viewingId];
-    if (msg) {
-        let text = /<[^>]+>/.test(msg.mes) ? `[System Content:\n${stripHtmlToText(msg.mes)}]` : msg.mes;
-        container.innerHTML = `<div class="viewer-container"><div class="viewer-header"><span style="color:#D500F9;">#${uiState.viewingId} Content</span><button class="close-btn" onclick="closeViewer()">CLOSE</button></div><div class="view-area">${text.replace(/</g, '&lt;')}</div></div>`;
+
+const updateNumpadDisplay = () => {
+    const el = document.getElementById('numpad-screen');
+    if (el) {
+        el.innerText = uiState.numpadValue;
+        el.style.color = uiState.numpadValue === "ID..." ? "#666" : "#fff";
     }
 };
 
-// index.js - Part 5: Styles & Init (Fixed Mobile Dragging)
+const renderViewerSection = () => {
+    const container = document.getElementById('section-viewer');
+    if (uiState.viewingId === null) {
+        container.innerHTML = "";
+        return;
+    }
+    
+    let chat = SillyTavern.getContext()?.chat || [];
+    const msg = chat[uiState.viewingId];
+    
+    if (msg) {
+        let text = /<[^>]+>/.test(msg.mes) ? `[System Content:\n${stripHtmlToText(msg.mes)}]` : msg.mes;
+        container.innerHTML = `
+            <div class="viewer-container">
+                <div class="viewer-header">
+                    <span style="color:#D500F9;">#${uiState.viewingId} Content</span>
+                    <button class="close-btn" onclick="closeViewer()">CLOSE</button>
+                </div>
+                <div class="view-area">${text.replace(/</g, '&lt;')}</div>
+            </div>
+        `;
+    }
+};
+
+// index.js - Part 5: Styles & Init (Fixed Mobile)
 
 // =================================================================
 // 6. STYLES & INIT
@@ -614,7 +808,7 @@ const injectStyles = () => {
     const style = document.createElement('style');
     style.id = 'chronos-style';
     style.innerHTML = `
-        /* --- ORB (ลูกแก้ว) --- */
+        /* --- ORB --- */
         #chronos-orb {
             position: fixed;
             top: 150px;
@@ -634,9 +828,18 @@ const injectStyles = () => {
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6);
             animation: spin-slow 4s linear infinite;
             
-            /* Fixed Mobile Dragging */
+            /* TOUCH FIX */
             touch-action: none; 
             user-select: none;
+            transition: all 0.3s ease;
+        }
+        
+        /* ACTIVE GLOW */
+        #chronos-orb.active {
+            border-color: #00E676;
+            color: #00E676;
+            box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676;
+            transform: scale(1.1);
         }
 
         @keyframes spin-slow {
@@ -644,7 +847,7 @@ const injectStyles = () => {
             100% { transform: rotate(360deg); }
         }
 
-        /* --- MAIN WINDOW --- */
+        /* --- WINDOW --- */
         #chronos-inspector {
             position: fixed;
             top: 80px;
@@ -696,10 +899,13 @@ const injectStyles = () => {
             display: flex;
             justify-content: space-between;
             border-bottom: 1px solid #D500F9;
+            
+            /* TOUCH FIX */
             touch-action: none;
             user-select: none;
         }
 
+        /* Controls */
         .control-zone {
             display: flex;
             gap: 15px;
@@ -976,6 +1182,7 @@ const injectStyles = () => {
 // =================================================================
 // 7. INITIALIZATION (Fixed Drag Logic)
 // =================================================================
+
 const createUI = () => {
     const oldOrb = document.getElementById('chronos-orb');
     if (oldOrb) oldOrb.remove();
@@ -993,14 +1200,17 @@ const createUI = () => {
     document.body.appendChild(orb); 
     document.body.appendChild(ins);
     
+    // Toggle Panel
     orb.onclick = (e) => {
         if (orb.getAttribute('data-dragging') === 'true') return;
         
         if (ins.style.display === 'none' || ins.style.display === '') {
             ins.style.display = 'block';
+            orb.classList.add('active'); // Add Glow
             updateUI();
         } else {
             ins.style.display = 'none';
+            orb.classList.remove('active'); // Remove Glow
         }
     };
     
@@ -1012,9 +1222,15 @@ const makeDraggable = (elm, type) => {
     let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
     
     const dragStart = (e) => {
+        // Check locks
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
-        if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
+        
+        // Ensure user is clicking the header for the panel
+        if (type === 'panel') {
+            const isHeader = e.target.classList.contains('ins-header') || e.target.parentElement.classList.contains('ins-header');
+            if (!isHeader) return;
+        }
         
         // Get coordinates (Touch compatible)
         const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
@@ -1023,15 +1239,19 @@ const makeDraggable = (elm, type) => {
         pos3 = clientX; 
         pos4 = clientY;
         
-        document.onmouseup = dragEnd; 
-        document.onmousemove = dragAction;
-        document.ontouchend = dragEnd; 
-        document.ontouchmove = dragAction;
+        // Events (Add Touch Support)
+        document.addEventListener('mouseup', dragEnd);
+        document.addEventListener('mousemove', dragAction);
+        
+        // Mobile Events (Passive: false to allow preventDefault)
+        document.addEventListener('touchend', dragEnd);
+        document.addEventListener('touchmove', dragAction, { passive: false });
         
         elm.setAttribute('data-dragging', 'true');
     };
     
     const dragAction = (e) => {
+        // Get coordinates
         const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
         const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
         
@@ -1040,26 +1260,29 @@ const makeDraggable = (elm, type) => {
         pos3 = clientX; 
         pos4 = clientY;
         
+        // Apply position
         elm.style.top = (elm.offsetTop - pos2) + "px"; 
         elm.style.left = (elm.offsetLeft - pos1) + "px";
         
-        // Prevent Mobile Scroll
+        // Prevent scrolling on mobile
         if(e.cancelable) e.preventDefault();
     };
     
     const dragEnd = () => {
-        document.onmouseup = null; 
-        document.onmousemove = null; 
-        document.ontouchend = null; 
-        document.ontouchmove = null;
+        document.removeEventListener('mouseup', dragEnd);
+        document.removeEventListener('mousemove', dragAction);
+        document.removeEventListener('touchend', dragEnd);
+        document.removeEventListener('touchmove', dragAction);
         
+        // Delay resetting flag
         setTimeout(() => {
             elm.setAttribute('data-dragging', 'false');
         }, 100);
     };
     
-    elm.onmousedown = dragStart; 
-    elm.ontouchstart = dragStart;
+    // Add listeners (Passive: false for touchstart)
+    elm.addEventListener('mousedown', dragStart);
+    elm.addEventListener('touchstart', dragStart, { passive: false });
 };
 
 // Start Extension
@@ -1073,6 +1296,7 @@ const makeDraggable = (elm, type) => {
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
     }
     
+    // Loop updates
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
         if (ins && (ins.style.display === 'block' || ins.style.display === 'flex')) {
@@ -1081,4 +1305,3 @@ const makeDraggable = (elm, type) => {
     }, 2000);
 })();
 
-                                                                                                                                                                                                                                                                                                                                                                                        
