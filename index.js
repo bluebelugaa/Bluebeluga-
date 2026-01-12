@@ -542,3 +542,141 @@ const createUI = () => {
         if (ins && ins.style.display === 'block') updateUI();
     }, 2000);
 })();
+
+// =================================================================
+// 7. FRIEND SIDE CHAT SYSTEM (วางต่อท้าย Chronos ได้เลย)
+// =================================================================
+
+(function() { // ครอบด้วยฟังก์ชันเพื่อไม่ให้ตีกับ Chronos
+
+    // --- ส่วนตั้งค่า (Prompt) ---
+    // ⚠️ สำคัญ: ห้ามลบเครื่องหมาย ` (Backtick) หัวท้ายเด็ดขาด
+    const SYSTEM_PROMPT = `
+Usage: Always active
+Use HTML code following the specified format.
+All five personalities act as close friends...
+( ... ใส่ Prompt ยาวๆ ของคุณแทนที่ตรงนี้ ... )
+Progress Enforcement: ...
+`;
+
+    // ตัวแปรเก็บประวัติ
+    let chatHistory = [];
+
+    // ฟังก์ชันสร้างหน้าต่าง
+    function createChatWindow() {
+        if (document.getElementById('side-friend-panel')) return;
+
+        // CSS
+        const style = document.createElement('style');
+        style.innerHTML = `
+            #side-friend-panel {
+                position: fixed; top: 100px; left: 20px; 
+                width: 380px; height: 600px;
+                background: #111; border: 1px solid #c5a059;
+                display: none; flex-direction: column; z-index: 9999;
+                box-shadow: 0 0 20px rgba(0,0,0,0.8);
+                font-family: sans-serif; resize: both; overflow: hidden;
+            }
+            .sf-header { background: #c5a059; color: #000; padding: 8px; font-weight: bold; cursor: move; display:flex; justify-content:space-between; }
+            .sf-log { flex: 1; overflow-y: auto; padding: 10px; background: #1a1a1a; color: #ccc; font-size: 13px; }
+            .sf-input { display: flex; padding: 8px; background: #222; gap: 5px; }
+            .sf-text { flex: 1; background: #000; color: #fff; border: 1px solid #444; padding: 5px; }
+            .sf-btn { background: #c5a059; border: none; font-weight: bold; cursor: pointer; padding: 0 10px; }
+            .sf-msg { margin-bottom: 8px; padding: 6px; border-radius: 4px; background: #2a2a2a; }
+            .sf-user { text-align: right; background: #333; color: #aaa; }
+        `;
+        document.head.appendChild(style);
+
+        // HTML
+        const panel = document.createElement('div');
+        panel.id = 'side-friend-panel';
+        panel.innerHTML = `
+            <div class="sf-header" id="sf-drag">
+                <span>👥 Friends Overlay</span>
+                <span style="cursor:pointer" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
+            </div>
+            <div class="sf-log" id="sf-log-area">
+                <div style="text-align:center; color:#555; margin-top:20px;">System Ready.<br>Chat is separate from main story.</div>
+            </div>
+            <div class="sf-input">
+                <input type="text" class="sf-text" id="sf-input-box" placeholder="Message to friends (OOC)...">
+                <button class="sf-btn" id="sf-send-btn">SEND</button>
+            </div>
+        `;
+        document.body.appendChild(panel);
+
+        // Events
+        $(panel).draggable({ handle: "#sf-drag" }); // ใช้ jQuery ของ ST
+        
+        const sendFunc = async () => {
+            const txt = document.getElementById('sf-input-box').value;
+            if(!txt) return;
+            document.getElementById('sf-input-box').value = '';
+            
+            // Show User Msg
+            const log = document.getElementById('sf-log-area');
+            log.innerHTML += `<div class="sf-msg sf-user">Op: ${txt}</div>`;
+            chatHistory.push({ role: 'user', content: `[message] ${txt}` });
+
+            // Prepare API Payload
+            const context = SillyTavern.getContext();
+            const lastMes = context.chat && context.chat.length ? context.chat[context.chat.length-1].mes : "";
+            // ตัด HTML tags ออกก่อนส่ง
+            const cleanMes = lastMes.replace(/<[^>]+>/g, '');
+            
+            const payload = [
+                { role: 'system', content: SYSTEM_PROMPT },
+                ...chatHistory,
+                { role: 'user', content: `(Current Story Context: "${cleanMes}")\n\n[message] ${txt}` }
+            ];
+
+            // Show Loading
+            const loadId = 'load'+Date.now();
+            log.innerHTML += `<div id="${loadId}" style="color:yellow; font-size:11px;">Generating...</div>`;
+            log.scrollTop = log.scrollHeight;
+
+            try {
+                // --- CONNECT TO API ---
+                // ใช้ท่าไม้ตาย: Generate ผ่าน ST function (ถ้ามี)
+                // ถ้าไม่มี ให้ตอบกลับหลอกๆ เพื่อเทส UI ก่อน
+                
+                let reply = "";
+                if(typeof SillyTavern.Generate === 'function') {
+                     // พยายามเรียกใช้ (API จริง)
+                     reply = await SillyTavern.Generate(payload, { quiet: true });
+                } else {
+                     // ถ้าหาฟังก์ชันไม่เจอ (Mock)
+                     await new Promise(r => setTimeout(r, 1000)); // รอ 1 วิ
+                     reply = "⚠️ API Error: Cannot find Generation function. UI is working though!";
+                }
+
+                document.getElementById(loadId).remove();
+                log.innerHTML += `<div class="sf-msg">${reply}</div>`;
+                chatHistory.push({ role: 'assistant', content: reply });
+                
+            } catch(e) {
+                document.getElementById(loadId).innerText = "Error: " + e.message;
+            }
+            log.scrollTop = log.scrollHeight;
+        };
+
+        document.getElementById('sf-send-btn').onclick = sendFunc;
+        document.getElementById('sf-input-box').onkeydown = (e) => { if(e.key==='Enter') sendFunc(); };
+    }
+
+    // สร้างปุ่มเปิด
+    $(document).ready(() => {
+        createChatWindow();
+        const btn = document.createElement('div');
+        btn.className = 'drawer-trigger';
+        btn.innerHTML = '👥';
+        btn.onclick = () => {
+            const p = document.getElementById('side-friend-panel');
+            p.style.display = (p.style.display === 'none') ? 'flex' : 'none';
+        };
+        const bar = document.getElementById('top-bar');
+        if(bar) bar.appendChild(btn);
+    });
+
+})(); // จบฟังก์ชันครอบ
+
