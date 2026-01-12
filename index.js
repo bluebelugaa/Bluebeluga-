@@ -1,38 +1,25 @@
-// index.js - Chronos V66.21 (UI Overhaul + Animation) 🌌
-// Update: Better Checkboxes, Click Animation, Interactive Holotag
-// Author: BlueBeluga (Modified)
+// index.js - Chronos V66.16 (Stateful UI) 🌌🧠
+// UI: Neon V47 (Preserved)
+// Fix 1: Message viewer persists after refresh (State management).
+// Fix 2: Numpad is collapsible (Hidden by default).
 
-const extensionName = "Chronos_Integrated_Final_UI";
-
-// =================================================================
-// 0. FRIEND CONFIG
-// =================================================================
-// ⚠️ ใส่ Prompt ของแก๊งเพื่อนตรงนี้ (ห้ามลบเครื่องหมาย ` )
-const FRIEND_SYSTEM_PROMPT = `
-Usage: Always active
-Use HTML code following the specified format.
-All five personalities act as close friends...
-(วาง Prompt ของคุณทับข้อความนี้)
-Progress Enforcement: ...
-`;
+const extensionName = "Chronos_V66_16_Stateful";
 
 // =================================================================
-// 1. STATE & CACHE
+// 1. GLOBAL STATE & CACHE
 // =================================================================
 let dragConfig = { orbUnlocked: false, panelUnlocked: false };
 let uiState = {
-    showNumpad: false,
-    viewingId: null,
-    numpadValue: "ID...",
-    isPanelBuilt: false,
-    friendMode: false 
+    showNumpad: false,    // Is Numpad open?
+    viewingId: null,      // Currently inspected message ID
+    numpadValue: "ID..."  // Current value in numpad
 };
 
-let friendChatHistory = []; 
-
-// Cache
-let lastRenderData = {
-    saved: -1, range: "", total: -1, load: -1, max: -1, msgCount: -1
+// Cache to reduce lag
+let cache = {
+    lastChatLen: -1,
+    lastStats: null,
+    lastContextMax: 0
 };
 
 const getChronosTokenizer = () => {
@@ -48,9 +35,13 @@ const getChronosTokenizer = () => {
 
 const stripHtmlToText = (html) => {
     if (!html) return "";
-    let text = html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n')
-                   .replace(/<\/div>/gi, '\n').replace(/<\/h[1-6]>/gi, '\n');
-    text = text.replace(/<[^>]+>/g, '').replace(/&lt;[^&]+&gt;/g, '').replace(/\n\s*\n/g, '\n\n').trim();
+    let text = html.replace(/<br\s*\/?>/gi, '\n')
+                   .replace(/<\/p>/gi, '\n\n')
+                   .replace(/<\/div>/gi, '\n')
+                   .replace(/<\/h[1-6]>/gi, '\n');
+    text = text.replace(/<[^>]+>/g, ''); 
+    text = text.replace(/&lt;[^&]+&gt;/g, ''); 
+    text = text.replace(/\n\s*\n/g, '\n\n').trim();
     return text;
 };
 
@@ -58,6 +49,9 @@ const stripHtmlToText = (html) => {
 // 2. HOOKS
 // =================================================================
 const optimizePayload = (data) => {
+    // Reset cache
+    cache.lastChatLen = -1; 
+    
     const processText = (text) => {
         if (text && /<[^>]+>|&lt;[^&]+&gt;/.test(text)) {
             return `[System Content:\n${stripHtmlToText(text)}]`;
@@ -69,7 +63,10 @@ const optimizePayload = (data) => {
     } else if (data.body?.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
-    setTimeout(() => { lastRenderData.msgCount = -1; updateUI(); }, 1000);
+    setTimeout(() => {
+        const ins = document.getElementById('chronos-inspector');
+        if (ins && ins.style.display === 'block') renderInspector();
+    }, 1000);
     return data;
 };
 
@@ -85,6 +82,7 @@ const findMaxContext = (contextObj) => {
     if (max === 0 && typeof window.settings !== 'undefined' && window.settings.context_size) {
         max = parseInt(window.settings.context_size);
     }
+    // Fallback default
     if (max === 0) max = 4096; 
     return max;
 };
@@ -100,6 +98,12 @@ const calculateStats = () => {
     if (!chat || chat.length === 0) return { savedTokens: 0, rangeLabel: "Waiting...", max: 0, totalMsgs: 0, currentLoad: 0 };
 
     const maxTokens = findMaxContext(context);
+    
+    // Check Cache
+    if (chat.length === cache.lastChatLen && cache.lastStats && maxTokens === cache.lastContextMax) {
+        return cache.lastStats;
+    }
+
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => {
         if (!text) return 0;
@@ -128,35 +132,52 @@ const calculateStats = () => {
     let currentTotalUsage = context.tokens || 0;
     if (currentTotalUsage === 0) currentTotalUsage = messageTokensArray.reduce((a,b)=>a+b, 0);
 
-    let rangeLabel = "...";
+    let rangeLabel = "Calculating...";
     let startIndex = 0;
     let endIndex = chat.length - 1;
     let accumulated = 0;
     
     for (let i = chat.length - 1; i >= 0; i--) {
         let t = messageTokensArray[i];
-        if (accumulated + t < maxTokens) { accumulated += t; startIndex = i; } 
-        else { break; }
+        if (accumulated + t < maxTokens) {
+            accumulated += t;
+            startIndex = i;
+        } else {
+            break;
+        }
     }
     rangeLabel = `#${startIndex} ➔ #${endIndex}`;
 
-    return {
-        savedTokens: totalSaved, rangeLabel: rangeLabel, max: maxTokens, totalMsgs: chat.length, currentLoad: currentTotalUsage
+    const result = {
+        savedTokens: totalSaved,
+        rangeLabel: rangeLabel,
+        max: maxTokens,
+        totalMsgs: chat.length,
+        currentLoad: currentTotalUsage
     };
+
+    cache.lastChatLen = chat.length;
+    cache.lastStats = result;
+    cache.lastContextMax = maxTokens;
+
+    return result;
 };
 
 // =================================================================
-// 4. INTERACTION
+// 4. INTERACTION FUNCTIONS (Updates State)
 // =================================================================
 window.toggleNumpad = () => {
     uiState.showNumpad = !uiState.showNumpad;
-    renderNumpadSection();
+    renderInspector();
 };
 
 window.numpadType = (num) => {
     let current = uiState.numpadValue;
     if (current === "ID...") current = "";
-    if (current.length < 5) { uiState.numpadValue = current + num; updateNumpadDisplay(); }
+    if (current.length < 5) {
+        uiState.numpadValue = current + num;
+        renderInspector();
+    }
 };
 
 window.numpadDel = () => {
@@ -164,7 +185,7 @@ window.numpadDel = () => {
     if (current === "ID..." || current.length === 0) return;
     uiState.numpadValue = current.slice(0, -1);
     if (uiState.numpadValue === "") uiState.numpadValue = "ID...";
-    updateNumpadDisplay();
+    renderInspector();
 };
 
 window.numpadGo = () => {
@@ -174,271 +195,155 @@ window.numpadGo = () => {
     window.setViewingId(id);
 };
 
-// --- View Handler with Animation ---
 window.setViewingId = (id) => {
     let chat = [];
     if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
     else if (typeof window.chat !== 'undefined') chat = window.chat;
-    if (isNaN(id) || id < 0 || id >= chat.length) return;
+
+    if (isNaN(id) || id < 0 || id >= chat.length) {
+        // Optional: blink error
+        return;
+    }
     
     uiState.viewingId = id;
-    renderViewerSection();
-    
-    // Add Click Animation (Wobble Effect)
-    // หา Element ที่ถูกกดในลิสต์แล้วใส่ Class อนิเมชัน
-    const listItems = document.querySelectorAll('.msg-item');
-    listItems.forEach(el => {
-        if(el.innerText.includes(`#${id}`)) {
-            el.classList.remove('click-anim'); // Reset
-            void el.offsetWidth; // Trigger reflow
-            el.classList.add('click-anim'); // Add class
-        }
-    });
+    renderInspector(); // Trigger immediate re-render
 };
 
-window.closeViewer = () => { uiState.viewingId = null; renderViewerSection(); };
-
-window.closePanel = () => {
-    const ins = document.getElementById('chronos-inspector');
-    if (ins) ins.style.display = 'none';
-};
-
-// --- HOLOTAG TOGGLE (กดป้ายเพื่อสลับแชท) ---
-window.toggleHolotagMode = () => {
-    uiState.friendMode = !uiState.friendMode; // สลับโหมด
-    
-    const tag = document.getElementById('holo-tag');
-    if(tag) {
-        // เปลี่ยนข้อความบนป้ายตามโหมด
-        tag.innerText = uiState.friendMode ? 'CHAT ACTIVE' : 'SYSTEM';
-        // เปลี่ยนสีป้ายเล็กน้อย
-        tag.style.color = uiState.friendMode ? '#fff' : '#000';
-    }
-
-    document.getElementById('view-normal').style.display = uiState.friendMode ? 'none' : 'block';
-    document.getElementById('view-friend').style.display = uiState.friendMode ? 'flex' : 'none';
-};
-
-window.sendFriendMsg = async () => {
-    const input = document.getElementById('friend-input');
-    const log = document.getElementById('friend-log');
-    const txt = input.value.trim();
-    if (!txt) return;
-    
-    input.value = ''; 
-
-    // 1. Show User Msg
-    log.innerHTML += `<div style="margin-bottom:6px; text-align:right; padding:6px; background:#333; border-radius:4px; color:#aaa;"><b>Op:</b> ${txt}</div>`;
-    friendChatHistory.push({ role: 'user', content: `[message] ${txt}` });
-    log.scrollTop = log.scrollHeight;
-
-    // 2. Prepare Context
-    const context = SillyTavern.getContext();
-    const lastMsg = context.chat && context.chat.length > 0 ? context.chat[context.chat.length-1] : { name: '?', mes: '' };
-    const cleanMes = stripHtmlToText(lastMsg.mes);
-    
-    // 3. Payload
-    const payload = [
-        { role: 'system', content: FRIEND_SYSTEM_PROMPT },
-        ...friendChatHistory,
-        { role: 'user', content: `(Current Story Context:\n${lastMsg.name}: ${cleanMes})\n\n[message] ${txt}` }
-    ];
-
-    // 4. Send API
-    const loadId = 'load-' + Date.now();
-    log.innerHTML += `<div id="${loadId}" style="color:yellow; font-size:10px; margin:5px;">System Processing...</div>`;
-    log.scrollTop = log.scrollHeight;
-
-    try {
-        let reply = "";
-        if (typeof SillyTavern.Generate === 'function') {
-             reply = await SillyTavern.Generate(payload, { quiet: true });
-        } else {
-             reply = "⚠️ API Error: Generation function not found.";
-        }
-        document.getElementById(loadId).remove();
-        friendChatHistory.push({ role: 'assistant', content: reply });
-        log.innerHTML += `<div style="margin-bottom:10px; padding:5px; border-radius:4px;">${reply}</div>`;
-
-    } catch (e) {
-        document.getElementById(loadId).innerText = "Error: " + e.message;
-    }
-    log.scrollTop = log.scrollHeight;
+window.closeViewer = () => {
+    uiState.viewingId = null;
+    renderInspector();
 };
 
 // =================================================================
-// 5. CORE RENDERER
+// 5. UI RENDERER (State Based)
 // =================================================================
-
-// A. Build the Skeleton
-const buildBaseUI = () => {
-    const ins = document.getElementById('chronos-inspector');
-    if (!ins) return;
-    
-    // สร้างป้าย Holotag ไว้ข้างนอก div หลักเพื่อให้ z-index ทำงานง่ายขึ้น หรือไว้ข้างในแต่ดัน absolute
-    // ในที่นี้เอาไว้ข้างใน แต่ใช้ absolute ดันออกไป
-    
-    ins.innerHTML = `
-        <div id="holo-tag" onclick="toggleHolotagMode()">SYSTEM</div>
-
-        <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.21</span>
-            <span style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
-        </div>
-        
-        <div class="control-zone">
-            <div class="custom-control">
-                <input type="checkbox" id="chk-orb" onchange="toggleDrag('orb', this.checked)" ${dragConfig.orbUnlocked ? 'checked' : ''}>
-                <label for="chk-orb" class="neon-checkbox"></label>
-                <span>Move Orb</span>
-            </div>
-            
-            <div class="custom-control">
-                <input type="checkbox" id="chk-win" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}>
-                <label for="chk-win" class="neon-checkbox"></label>
-                <span>Move Win</span>
-            </div>
-            
-            </div>
-
-        <div id="view-normal" style="display: ${uiState.friendMode ? 'none' : 'block'};">
-            <div class="dashboard-zone">
-                <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
-                    <span style="color:#aaa;">🔋 Tokens Saved</span>
-                    <span class="dash-val" style="color:#E040FB;" id="disp-saved">0 T</span>
-                </div>
-
-                <div class="dash-row" style="align-items:center;">
-                    <span style="color:#fff;">🧠 Memory</span>
-                    <span class="dash-val" style="color:#00E676; font-size:14px;" id="disp-range">...</span>
-                </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar" id="disp-bar" style="width: 0%"></div>
-                </div>
-                
-                <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-top:5px;">
-                    <button class="toggle-numpad-btn" id="btn-toggle-numpad" onclick="toggleNumpad()">🔢 ID Search</button>
-                    <div style="font-size:9px; color:#aaa;">📚 Total: <span style="color:#fff;" id="disp-total">0</span></div>
-                </div>
-            </div>
-
-            <div class="ins-body">
-                <div id="section-numpad"></div>
-                <div id="section-viewer"></div>
-                <div style="font-size:9px; color:#666; margin-bottom:4px; margin-top:5px;">RECENT MESSAGES</div>
-                <div class="msg-list" id="section-list"></div>
-            </div>
-        </div>
-
-        <div id="view-friend" style="display: ${uiState.friendMode ? 'flex' : 'none'}; flex-direction: column; height: 380px;">
-            <div id="friend-log" style="flex:1; overflow-y:auto; padding:10px; background:#1a1a1a; font-size:12px; color:#ccc;">
-                <div style="text-align:center; color:#555; margin-top:20px;">
-                    Friends Mode Active.<br>Messages here are OOC.
-                </div>
-            </div>
-            <div style="padding:8px; background:#222; display:flex; gap:5px; border-top:1px solid #c5a059;">
-                <input type="text" id="friend-input" style="flex:1; background:#000; border:1px solid #444; color:#fff; padding:5px; font-size:12px;" placeholder="Message..." onkeydown="if(event.key==='Enter') sendFriendMsg()">
-                <button onclick="sendFriendMsg()" style="background:#c5a059; border:none; color:#000; font-weight:bold; cursor:pointer; padding:0 10px;">➤</button>
-            </div>
-        </div>
-    `;
-    uiState.isPanelBuilt = true;
-};
-
-// B. Update Numbers
-const updateUI = () => {
+const renderInspector = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
 
-    if (!uiState.isPanelBuilt || ins.innerHTML === "") buildBaseUI();
-    if (uiState.friendMode) return;
+    // Get Data
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') chat = SillyTavern.getContext()?.chat || [];
+    else if (typeof window.chat !== 'undefined') chat = window.chat;
 
     const stats = calculateStats();
+    let percent = 0;
+    if (stats.max > 0) percent = Math.min((stats.currentLoad / stats.max) * 100, 100);
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
-    if (stats.savedTokens !== lastRenderData.saved) {
-        document.getElementById('disp-saved').innerText = `${fmt(stats.savedTokens)} T`;
-        lastRenderData.saved = stats.savedTokens;
-    }
-    if (stats.rangeLabel !== lastRenderData.range) {
-        document.getElementById('disp-range').innerText = stats.rangeLabel;
-        lastRenderData.range = stats.rangeLabel;
-    }
-    if (stats.totalMsgs !== lastRenderData.total) {
-        document.getElementById('disp-total').innerText = fmt(stats.totalMsgs);
-        lastRenderData.total = stats.totalMsgs;
-    }
+    // --- HTML CONSTRUCTION ---
     
-    let percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
-    if (Math.abs(percent - lastRenderData.load) > 0.5) { 
-        document.getElementById('disp-bar').style.width = `${percent}%`;
-        lastRenderData.load = percent;
-    }
-
-    if (stats.totalMsgs !== lastRenderData.msgCount) {
-        renderListSection();
-        lastRenderData.msgCount = stats.totalMsgs;
-    }
-    if (document.getElementById('section-numpad').innerHTML === "" && uiState.showNumpad) renderNumpadSection();
-};
-
-const renderNumpadSection = () => {
-    const container = document.getElementById('section-numpad');
-    document.getElementById('btn-toggle-numpad').innerText = uiState.showNumpad ? '🔽 Hide Keypad' : '🔢 ID Search';
-    if (!uiState.showNumpad) { container.innerHTML = ""; return; }
-    
-    const displayColor = uiState.numpadValue === "ID..." ? "#666" : "#fff";
-    container.innerHTML = `
-        <div class="numpad-wrapper">
-            <div class="numpad-display" id="numpad-screen" style="color:${displayColor}">${uiState.numpadValue}</div>
-            <div class="numpad-grid">
-                ${[1,2,3].map(n=>`<button class="num-btn" onclick="numpadType(${n})">${n}</button>`).join('')}
-                <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
-                ${[4,5,6].map(n=>`<button class="num-btn" onclick="numpadType(${n})">${n}</button>`).join('')}
-                <button class="num-btn go-btn" onclick="numpadGo()">GO</button>
-                ${[7,8,9,0].map(n=>`<button class="num-btn" onclick="numpadType(${n})">${n}</button>`).join('')}
-            </div>
-        </div>`;
-};
-
-const updateNumpadDisplay = () => {
-    const el = document.getElementById('numpad-screen');
-    if (el) { el.innerText = uiState.numpadValue; el.style.color = uiState.numpadValue === "ID..." ? "#666" : "#fff"; }
-};
-
-const renderViewerSection = () => {
-    const container = document.getElementById('section-viewer');
-    if (uiState.viewingId === null) { container.innerHTML = ""; return; }
-    
-    let chat = SillyTavern.getContext()?.chat || [];
-    const msg = chat[uiState.viewingId];
-    if (msg) {
-        let cleanText = stripHtmlToText(msg.mes);
-        let aiViewText = /<[^>]+>|&lt;[^&]+&gt;/.test(msg.mes) ? `[System Content:\n${cleanText}]` : msg.mes;
-        container.innerHTML = `
-            <div class="viewer-container">
-                <div class="viewer-header">
-                    <span style="color:#D500F9;">#${uiState.viewingId} Content</span>
-                    <button class="close-btn" onclick="closeViewer()">CLOSE</button>
-                </div>
-                <div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>
-            </div>`;
-    }
-};
-
-const renderListSection = () => {
-    const container = document.getElementById('section-list');
-    let chat = SillyTavern.getContext()?.chat || [];
-    if (chat.length > 0) {
-        container.innerHTML = chat.slice(-5).reverse().map((msg, i) => {
+    // 1. Message List
+    let listHtml = "";
+    if (chat && chat.length > 0) {
+        listHtml = chat.slice(-5).reverse().map((msg, i) => {
             const actualIdx = chat.length - 1 - i;
-            // เพิ่ม class transition สำหรับอนิเมชัน
+            const cleanContent = msg.mes || "";
+            const preview = cleanContent.substring(0, 20).replace(/</g, '&lt;');
+            const roleIcon = msg.is_user ? '👤' : '🤖';
+            // Note: calling setViewingId instead of direct DOM manipulation
             return `<div class="msg-item" onclick="setViewingId(${actualIdx})">
-                        <span style="color:#D500F9;">#${actualIdx}</span> ${msg.is_user?'👤':'🤖'} ${(msg.mes||"").substring(0,20).replace(/</g,'&lt;')}...
+                        <span style="color:#D500F9;">#${actualIdx}</span> ${roleIcon} ${preview}...
                     </div>`;
         }).join('');
-    } else { container.innerHTML = `<div style="padding:5px; color:#666; font-size:10px;">No messages</div>`; }
+    }
+
+    // 2. Numpad HTML (Conditional)
+    let numpadHtml = "";
+    if (uiState.showNumpad) {
+        const displayColor = uiState.numpadValue === "ID..." ? "#666" : "#fff";
+        numpadHtml = `
+            <div class="numpad-wrapper">
+                <div class="numpad-display" style="color:${displayColor}">${uiState.numpadValue}</div>
+                <div class="numpad-grid">
+                    <button class="num-btn" onclick="numpadType(1)">1</button>
+                    <button class="num-btn" onclick="numpadType(2)">2</button>
+                    <button class="num-btn" onclick="numpadType(3)">3</button>
+                    <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
+                    <button class="num-btn" onclick="numpadType(4)">4</button>
+                    <button class="num-btn" onclick="numpadType(5)">5</button>
+                    <button class="num-btn" onclick="numpadType(6)">6</button>
+                    <button class="num-btn go-btn" onclick="numpadGo()">GO</button>
+                    <button class="num-btn" onclick="numpadType(7)">7</button>
+                    <button class="num-btn" onclick="numpadType(8)">8</button>
+                    <button class="num-btn" onclick="numpadType(9)">9</button>
+                    <button class="num-btn" onclick="numpadType(0)">0</button>
+                </div>
+            </div>
+        `;
+    }
+
+    // 3. View Content HTML (Conditional Persistence)
+    let viewerHtml = "";
+    if (uiState.viewingId !== null) {
+        const msg = chat[uiState.viewingId];
+        if (msg) {
+            let cleanText = stripHtmlToText(msg.mes);
+            let aiViewText = msg.mes; 
+            if (/<[^>]+>|&lt;[^&]+&gt;/.test(msg.mes)) {
+                aiViewText = `[System Content:\n${cleanText}]`;
+            }
+            viewerHtml = `
+                <div class="viewer-container">
+                    <div class="viewer-header">
+                        <span style="color:#D500F9;">#${uiState.viewingId} Content</span>
+                        <button class="close-btn" onclick="closeViewer()">CLOSE</button>
+                    </div>
+                    <div class="view-area">${aiViewText.replace(/</g, '&lt;')}</div>
+                </div>
+            `;
+        }
+    }
+
+    // --- RENDER ---
+    const scrollPos = ins.querySelector('.ins-body') ? ins.querySelector('.ins-body').scrollTop : 0;
+
+    ins.innerHTML = `
+        <div class="ins-header" id="panel-header">
+            <span>🚀 CHRONOS V66.16</span>
+            <span style="cursor:pointer; color:#ff4081;" onclick="this.parentElement.parentElement.style.display='none'">✖</span>
+        </div>
+        
+        <div class="control-zone">
+            <label style="cursor:pointer;"><input type="checkbox" onchange="toggleDrag('orb', this.checked)" ${dragConfig.orbUnlocked ? 'checked' : ''}> Move Orb</label>
+            <label style="cursor:pointer;"><input type="checkbox" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}> Move Win</label>
+        </div>
+
+        <div class="dashboard-zone">
+            <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
+                <span style="color:#aaa;">🔋 Tokens Saved</span>
+                <span class="dash-val" style="color:#E040FB;">${fmt(stats.savedTokens)} T</span>
+            </div>
+
+            <div class="dash-row" style="align-items:center;">
+                <span style="color:#fff;">🧠 Memory</span>
+                <span class="dash-val" style="color:#00E676; font-size:14px;">${stats.rangeLabel}</span>
+            </div>
+
+            <div class="progress-container">
+                <div class="progress-bar" style="width: ${percent}%"></div>
+            </div>
+            
+            <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-top:5px;">
+                <button class="toggle-numpad-btn" onclick="toggleNumpad()">
+                    ${uiState.showNumpad ? '🔽 Hide Keypad' : '🔢 ID Search'}
+                </button>
+                <div style="font-size:9px; color:#aaa;">📚 Total: <span style="color:#fff;">${fmt(stats.totalMsgs)}</span></div>
+            </div>
+        </div>
+
+        <div class="ins-body">
+            ${numpadHtml}
+            ${viewerHtml}
+            
+            <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase; margin-top:5px;">Recent Messages</div>
+            <div class="msg-list">${listHtml}</div>
+        </div>
+    `;
+
+    // Restore scroll if needed (though layout changes might make this jumpy, it's better than reset)
+    // const bodyEl = ins.querySelector('.ins-body');
+    // if(bodyEl) bodyEl.scrollTop = scrollPos;
 };
 
 // =================================================================
@@ -451,7 +356,6 @@ const injectStyles = () => {
     const style = document.createElement('style');
     style.id = 'chronos-style';
     style.innerHTML = `
-        /* ORB & PANEL */
         #chronos-orb {
             position: fixed; top: 150px; right: 20px; width: 40px; height: 40px;
             background: radial-gradient(circle, rgba(20,0,30,0.9) 0%, rgba(0,0,0,1) 100%);
@@ -460,7 +364,9 @@ const injectStyles = () => {
             cursor: pointer; display: flex; align-items: center; justify-content: center;
             font-size: 20px; color: #E040FB; 
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6), inset 0 0 10px rgba(213, 0, 249, 0.3);
-            user-select: none; animation: spin-slow 4s linear infinite; transition: transform 0.2s;
+            user-select: none; 
+            animation: spin-slow 4s linear infinite;
+            transition: transform 0.2s;
         }
         #chronos-orb:hover { transform: scale(1.1); border-color: #00E676; color: #00E676; box-shadow: 0 0 25px #00E676; }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -470,77 +376,18 @@ const injectStyles = () => {
             background: rgba(10, 10, 12, 0.95); 
             border: 1px solid #D500F9; border-top: 3px solid #D500F9;
             color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 12px;
-            display: none; z-index: 2147483647; border-radius: 8px;
+            display: none; 
+            z-index: 2147483647;
+            border-radius: 8px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.8); backdrop-filter: blur(10px);
-            overflow: visible; /* ต้อง visible เพื่อให้แท็กโผล่ */
+            overflow: hidden;
         }
-
-        /* --- HOLOTAG DESIGN (แก้ไขให้ไม่กลืนและคุมโทน) --- */
-        #holo-tag {
-            position: absolute;
-            top: -24px; /* ดันขึ้นไปเหนือกรอบ */
-            right: 20px;
-            background: #C5A059; /* สี Metallic Gold คุมโทน */
-            color: #000;
-            font-size: 10px; font-weight: 800; letter-spacing: 1px;
-            padding: 4px 15px;
-            border-radius: 4px 4px 0 0;
-            border: 1px solid #E5C079;
-            border-bottom: 2px solid #000; /* ตัดขอบล่างให้ดูไม่จม */
-            box-shadow: 0 -4px 10px rgba(197, 160, 89, 0.3);
-            cursor: pointer;
-            z-index: 100; /* อยู่เหนือสุด */
-            transition: all 0.2s;
+        .ins-header { 
+            background: linear-gradient(90deg, #4A0072, #2a0040); 
+            color: #fff; padding: 10px; font-weight: bold; letter-spacing: 1px; display: flex; justify-content: space-between; 
+            border-bottom: 1px solid #D500F9;
         }
-        #holo-tag:hover {
-            transform: translateY(-2px);
-            background: #fff;
-            box-shadow: 0 -4px 15px rgba(255, 255, 255, 0.5);
-        }
-        
-        /* ขาเชื่อม */
-        #chronos-inspector::before {
-            content: ''; position: absolute; top: -2px; right: 20px; width: 80px; height: 3px;
-            background: #C5A059; z-index: 99;
-        }
-
-        /* --- CUSTOM CHECKBOXES (เปลี่ยนเป็นปุ่ม Neon) --- */
-        .control-zone { 
-            display: flex; gap: 20px; padding: 10px 15px; 
-            background: #1a0520; border-bottom: 1px solid #330044; 
-        }
-        .custom-control { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-        .custom-control input { display: none; } /* ซ่อน Checkbox เดิม */
-        .neon-checkbox {
-            width: 14px; height: 14px;
-            border: 1px solid #555; border-radius: 3px;
-            background: #000; position: relative;
-            transition: 0.2s; cursor: pointer;
-        }
-        .custom-control input:checked + .neon-checkbox {
-            background: #00E676; border-color: #00E676;
-            box-shadow: 0 0 8px #00E676;
-        }
-        .custom-control span { color: #aaa; font-size: 11px; }
-        .custom-control:hover span { color: #fff; }
-
-        /* --- ANIMATION (วูบขวา) --- */
-        @keyframes slide-wobble {
-            0% { transform: translateX(0); }
-            30% { transform: translateX(10px); color: #00E676; }
-            60% { transform: translateX(5px); }
-            100% { transform: translateX(0); }
-        }
-        .msg-item { 
-            padding: 6px; cursor: pointer; border-bottom: 1px solid #222; 
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
-            color: #888; transition: background 0.2s;
-        }
-        .msg-item:hover { background: #330044; color: #fff; padding-left: 10px; }
-        .click-anim { animation: slide-wobble 0.4s ease-out; } /* Class ที่จะถูกใส่ตอนกด */
-
-        /* GENERAL UI */
-        .ins-header { background: linear-gradient(90deg, #4A0072, #2a0040); color: #fff; padding: 10px; font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #D500F9; }
+        .control-zone { display: flex; gap: 15px; padding: 6px 10px; background: #1a0520; color: #00E676; font-size: 11px; border-bottom: 1px solid #330044; }
         .dashboard-zone { background: #050505; padding: 15px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
         .dash-val { font-weight: bold; font-size: 13px; }
@@ -549,16 +396,24 @@ const injectStyles = () => {
         
         .ins-body { padding: 10px; background: #111; max-height: 400px; overflow-y: auto;}
         .msg-list { max-height: 120px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #0a0a0a; border-radius: 4px; }
-        
+        .msg-item { padding: 6px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; transition: 0.2s;}
+        .msg-item:hover { background: #330044; color: #fff; padding-left: 10px;}
+
+        /* Buttons */
         .toggle-numpad-btn { background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 2px 8px; font-size: 10px; cursor: pointer; }
-        .numpad-wrapper { background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px; border: 1px solid #333; }
+        .toggle-numpad-btn:hover { background: #555; }
+        
+        /* Numpad */
+        .numpad-wrapper { background: #1a1a1a; padding: 8px; border-radius: 4px; margin-bottom: 10px; border: 1px solid #333; animation: fade-in 0.2s; }
         .numpad-display { background: #000; padding: 4px; text-align: right; font-family: monospace; border: 1px solid #444; margin-bottom: 5px; height: 20px; display:flex; align-items:center; justify-content:flex-end; color: #fff;}
         .numpad-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
         .num-btn { background: #2a2a2a; color: #ccc; border: 1px solid #444; border-radius: 3px; padding: 6px; font-size: 11px; cursor: pointer; }
         .num-btn:active { background: #D500F9; color: #fff; }
-        .del-btn { color: #ff4081; } .go-btn { background: #00E676; color: #000; font-weight:bold; }
-        
-        .viewer-container { margin-bottom: 10px; border: 1px solid #D500F9; border-radius: 4px; background: #080808; overflow: hidden; }
+        .del-btn { color: #ff4081; }
+        .go-btn { background: #00E676; color: #000; font-weight:bold; }
+
+        /* Viewer */
+        .viewer-container { margin-bottom: 10px; border: 1px solid #D500F9; border-radius: 4px; background: #080808; overflow: hidden; animation: fade-in 0.2s; }
         .viewer-header { background: #1a0520; padding: 5px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
         .close-btn { background: #ff4081; color: #fff; border: none; font-size: 9px; padding: 2px 6px; border-radius: 2px; cursor: pointer; }
         .view-area { padding: 8px; height: 120px; overflow-y: auto; color: #00E676; white-space: pre-wrap; word-wrap: break-word; font-size: 11px; }
@@ -567,6 +422,7 @@ const injectStyles = () => {
         ::-webkit-scrollbar-track { background: #111; }
         ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #D500F9; }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     `;
     document.head.appendChild(style);
 };
@@ -616,13 +472,13 @@ const makeDraggable = (elm, type) => {
 const createUI = () => {
     const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
     const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
-    const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌌';
+    const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌀';
     const ins = document.createElement('div'); ins.id = 'chronos-inspector';
     document.body.appendChild(orb); document.body.appendChild(ins);
     orb.onclick = (e) => {
         if (orb.getAttribute('data-dragging') === 'true') return;
         ins.style.display = (ins.style.display === 'none') ? 'block' : 'none';
-        if (ins.style.display === 'block') updateUI();
+        if (ins.style.display === 'block') renderInspector();
     };
     makeDraggable(orb, 'orb'); makeDraggable(ins, 'panel');
 };
@@ -636,6 +492,6 @@ const createUI = () => {
     }
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
-        if (ins && ins.style.display === 'block') updateUI();
+        if (ins && ins.style.display === 'block') renderInspector();
     }, 2000);
 })();
