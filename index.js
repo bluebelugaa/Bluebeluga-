@@ -1,8 +1,7 @@
-// index.js - Chronos V66.27 (Ultimate Expanded - No Minification) 🌌
-// Features: Touch Fix, Active Glow, Full Character System
-// Status: Fully Expanded Line-by-Line
+// index.js - Chronos V66.28 (Ultimate Full Expanded) 🌌
+// Part 1: Config, Prompts & Data Storage
 
-const extensionName = "Chronos_Ultimate_V27";
+const extensionName = "Chronos_Ultimate_V28";
 
 // =================================================================
 // 0. HIDDEN PROMPTS
@@ -38,14 +37,14 @@ let uiState = {
     viewingId: null,
     numpadValue: "ID...",
     isPanelBuilt: false,
-    friendMode: false,
-    showCharSettings: false,
-    chatMode: 'group',
-    selectedCharId: null,
-    editingCharId: null
+    friendMode: false,        // สลับหน้าจอ System
+    showCharSettings: false,  // เปิดหน้าตั้งค่าตัวละคร
+    chatMode: 'group',        // 'group' หรือ 'route'
+    selectedCharId: null,     // ID ตัวละครที่เลือก
+    editingCharId: null       // ID ตัวละครที่กำลังแก้
 };
 
-// Data Structure (Loaded from Storage)
+// โครงสร้างข้อมูล (โหลดจาก LocalStorage)
 let globalData = {
     characters: [
         { 
@@ -72,6 +71,7 @@ let globalData = {
 
 let friendChatHistory = []; 
 
+// Cache เพื่อลดภาระเครื่อง
 let lastRenderData = {
     saved: -1,
     range: "",
@@ -94,7 +94,7 @@ const saveGlobalData = () => {
     localStorage.setItem('chronos_global_db_v1', JSON.stringify(globalData));
 };
 
-// Load immediately
+// Load ทันทีที่เริ่มทำงาน
 loadGlobalData();
 
 // --- Helpers ---
@@ -130,7 +130,7 @@ const stripHtmlToText = (html) => {
     return text;
 };
 
-// index.js - Part 2: Logic Core
+// index.js - Part 2: Logic Core & Calculator
 
 // =================================================================
 // 2. HOOKS
@@ -272,6 +272,7 @@ const calculateStats = () => {
         currentLoad: currentTotalUsage
     };
 };
+
 // index.js - Part 3: Interaction & Chat System
 
 // =================================================================
@@ -345,6 +346,7 @@ window.closePanel = () => {
         ins.style.display = 'none';
     }
     
+    // Remove glow when closed via X button
     if (orb) {
         orb.classList.remove('active'); 
     }
@@ -527,9 +529,7 @@ window.sendFriendMsg = async () => {
     
     log.scrollTop = log.scrollHeight;
 };
-
-
-// index.js - Part 4: UI Renderer
+    // index.js - Part 4: UI Renderer
 
 // =================================================================
 // 5. CORE RENDERER (UI GENERATION)
@@ -542,7 +542,7 @@ const buildBaseUI = () => {
     ins.innerHTML = `
         <div id="holo-tab-btn" onclick="toggleTabMode()">SYSTEM</div>
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.27</span>
+            <span>🚀 CHRONOS V66.28</span>
             <span style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
         </div>
         
@@ -794,8 +794,8 @@ const renderViewerSection = () => {
         `;
     }
 };
-
-// index.js - Part 5: Styles & Init (Fixed Mobile)
+        
+// index.js - Part 5: Styles, Drag Logic (Fixed) & Init
 
 // =================================================================
 // 6. STYLES & INIT
@@ -828,13 +828,13 @@ const injectStyles = () => {
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6);
             animation: spin-slow 4s linear infinite;
             
-            /* TOUCH FIX */
+            /* TOUCH FIX: Prevent default scroll */
             touch-action: none; 
             user-select: none;
             transition: all 0.3s ease;
         }
         
-        /* ACTIVE GLOW */
+        /* ACTIVE GLOW STATE */
         #chronos-orb.active {
             border-color: #00E676;
             color: #00E676;
@@ -899,8 +899,6 @@ const injectStyles = () => {
             display: flex;
             justify-content: space-between;
             border-bottom: 1px solid #D500F9;
-            
-            /* TOUCH FIX */
             touch-action: none;
             user-select: none;
         }
@@ -1180,7 +1178,7 @@ const injectStyles = () => {
 };
 
 // =================================================================
-// 7. INITIALIZATION (Fixed Drag Logic)
+// 7. INITIALIZATION (Fixed for Mobile Drag)
 // =================================================================
 
 const createUI = () => {
@@ -1200,9 +1198,12 @@ const createUI = () => {
     document.body.appendChild(orb); 
     document.body.appendChild(ins);
     
-    // Toggle Panel
+    // Toggle Logic with Active Glow
     orb.onclick = (e) => {
-        if (orb.getAttribute('data-dragging') === 'true') return;
+        // Prevent toggle if it was a drag operation
+        if (orb.getAttribute('data-dragging') === 'true') {
+            return;
+        }
         
         if (ins.style.display === 'none' || ins.style.display === '') {
             ins.style.display = 'block';
@@ -1219,70 +1220,77 @@ const createUI = () => {
 };
 
 const makeDraggable = (elm, type) => {
-    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    // Variables for calculations
+    let startX = 0;
+    let startY = 0;
+    let initialLeft = 0;
+    let initialTop = 0;
     
-    const dragStart = (e) => {
+    const onPointerDown = (e) => {
         // Check locks
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         
-        // Ensure user is clicking the header for the panel
+        // Header check for panel
         if (type === 'panel') {
-            const isHeader = e.target.classList.contains('ins-header') || e.target.parentElement.classList.contains('ins-header');
+            const isHeader = e.target.classList.contains('ins-header') || e.target.parentElement?.classList.contains('ins-header');
             if (!isHeader) return;
         }
         
-        // Get coordinates (Touch compatible)
-        const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
-        const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
+        // Normalize coordinates (Mouse vs Touch)
+        const evt = (e.touches && e.touches[0]) ? e.touches[0] : e;
+        startX = evt.clientX;
+        startY = evt.clientY;
         
-        pos3 = clientX; 
-        pos4 = clientY;
+        // Get initial position relative to the viewport
+        const rect = elm.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
         
-        // Events (Add Touch Support)
-        document.addEventListener('mouseup', dragEnd);
-        document.addEventListener('mousemove', dragAction);
+        // Add listeners for move/up events
+        document.addEventListener('mouseup', onPointerUp);
+        document.addEventListener('mousemove', onPointerMove);
+        document.addEventListener('touchend', onPointerUp);
         
-        // Mobile Events (Passive: false to allow preventDefault)
-        document.addEventListener('touchend', dragEnd);
-        document.addEventListener('touchmove', dragAction, { passive: false });
+        // IMPORTANT: passive: false allows e.preventDefault() to stop scrolling
+        document.addEventListener('touchmove', onPointerMove, { passive: false });
         
         elm.setAttribute('data-dragging', 'true');
     };
     
-    const dragAction = (e) => {
-        // Get coordinates
-        const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
-        const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
-        
-        pos1 = pos3 - clientX; 
-        pos2 = pos4 - clientY; 
-        pos3 = clientX; 
-        pos4 = clientY;
-        
-        // Apply position
-        elm.style.top = (elm.offsetTop - pos2) + "px"; 
-        elm.style.left = (elm.offsetLeft - pos1) + "px";
-        
-        // Prevent scrolling on mobile
+    const onPointerMove = (e) => {
+        // Stop default scroll behavior
         if(e.cancelable) e.preventDefault();
+        
+        const evt = (e.touches && e.touches[0]) ? e.touches[0] : e;
+        const currentX = evt.clientX;
+        const currentY = evt.clientY;
+        
+        const deltaX = currentX - startX;
+        const deltaY = currentY - startY;
+        
+        // Apply new position
+        elm.style.left = (initialLeft + deltaX) + "px";
+        elm.style.top = (initialTop + deltaY) + "px";
+        
+        // Ensure no transform interference
+        elm.style.transform = "none";
     };
     
-    const dragEnd = () => {
-        document.removeEventListener('mouseup', dragEnd);
-        document.removeEventListener('mousemove', dragAction);
-        document.removeEventListener('touchend', dragEnd);
-        document.removeEventListener('touchmove', dragAction);
+    const onPointerUp = () => {
+        document.removeEventListener('mouseup', onPointerUp);
+        document.removeEventListener('mousemove', onPointerMove);
+        document.removeEventListener('touchend', onPointerUp);
+        document.removeEventListener('touchmove', onPointerMove);
         
-        // Delay resetting flag
         setTimeout(() => {
             elm.setAttribute('data-dragging', 'false');
         }, 100);
     };
     
-    // Add listeners (Passive: false for touchstart)
-    elm.addEventListener('mousedown', dragStart);
-    elm.addEventListener('touchstart', dragStart, { passive: false });
+    // Bind Start Events
+    elm.addEventListener('mousedown', onPointerDown);
+    elm.addEventListener('touchstart', onPointerDown, { passive: false });
 };
 
 // Start Extension
