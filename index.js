@@ -1,7 +1,7 @@
-// index.js - Chronos V66.40 (Full Un-minified & Lorebook Bar Fix)
+// index.js - Chronos V66.50 (Lorebook Event Listener Edition)
 // Part 1: Config & Data
 
-const extensionName = "Chronos_Ultimate_V40";
+const extensionName = "Chronos_Ultimate_V50";
 
 // =================================================================
 // 0. HIDDEN PROMPTS
@@ -44,11 +44,12 @@ let uiState = {
     editingCharId: null
 };
 
-// เก็บข้อมูล Lorebook
+// เก็บข้อมูล Lorebook ตามแบบฉบับใหม่
 let lorebookState = {
     totalEntries: 0,
-    activeEntries: [],
-    activeCount: 0
+    activeEntries: [], // รายการที่ทำงานจริง
+    activeCount: 0,
+    isScanning: false
 };
 
 let globalData = {
@@ -81,7 +82,7 @@ let lastRenderData = {
     saved: -1,
     range: "",
     total: -1,
-    load: -1, // ใช้สำหรับเปอร์เซ็นต์ Lorebook
+    load: -1,
     max: -1,
     msgCount: -1,
     activeLore: -1
@@ -135,10 +136,10 @@ const stripHtmlToText = (html) => {
     return text;
 };
 
-// index.js - Part 2: Logic Core
+// index.js - Part 2: Logic Core (Event Listener Integration)
 
 // =================================================================
-// 2. HOOKS
+// 2. HOOKS & EVENTS
 // =================================================================
 
 const optimizePayload = (data) => {
@@ -166,98 +167,114 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR & SCANNER
+// 3. LOREBOOK ENGINE (Hybrid: Event + Manual)
 // =================================================================
 
-const findMaxContext = (contextObj) => {
-    let max = 0;
+// 3.1 ฟังก์ชันรับ Event จาก SillyTavern (แม่นยำที่สุด)
+const onWorldInfoActivated = (entryList) => {
+    // entryList คือ array ของ lorebook ที่ทำงานจริงในรอบนี้
+    if (!Array.isArray(entryList)) return;
+
+    const mappedEntries = entryList.map(entry => {
+        // กำหนด Strategy Icon แบบโค้ดตัวอย่าง
+        let strategyIcon = '🟢'; // Normal
+        if (entry.constant || (entry.position && entry.position.includes('constant'))) {
+            strategyIcon = '🔵'; // Constant
+        } else if (entry.vectorized) {
+            strategyIcon = '🔗'; // Vectorized
+        }
+
+        return {
+            name: entry.comment || entry.uid || "Untitled",
+            // ถ้าเป็น Constant จะไม่มี key ที่ทริกเกอร์ชัดเจน ให้ใส่เป็น Constant ไปเลย
+            trigger: entry.constant ? "[Constant]" : (entry.key ? entry.key.toString() : "Unknown"),
+            strategy: strategyIcon,
+            content: entry.content
+        };
+    });
+
+    lorebookState.activeEntries = mappedEntries;
+    lorebookState.activeCount = mappedEntries.length;
     
-    if (contextObj.max_context && contextObj.max_context > 0) {
-        max = parseInt(contextObj.max_context);
-    } else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) {
-        max = parseInt(SillyTavern.settings.context_size);
+    // อัปเดต Total
+    if (typeof SillyTavern !== 'undefined' && SillyTavern.world_info) {
+        lorebookState.totalEntries = Object.values(SillyTavern.world_info).filter(e => !e.disable).length;
     }
-    
-    if (max === 0 && typeof window.settings !== 'undefined' && window.settings.context_size) {
-        max = parseInt(window.settings.context_size);
-    }
-    
-    if (max === 0) {
-        max = 4096;
-    }
-    
-    return max;
+
+    updateUI();
 };
 
-// สแกน Lorebook (World Info)
-const scanLorebooks = () => {
-    let context = {};
-    if (typeof SillyTavern !== 'undefined') {
-        context = SillyTavern.getContext() || {};
-    }
 
-    const chat = context.chat || [];
-    
-    // เอาข้อความล่าสุดมาเช็ค Key
-    let textToScan = "";
-    if (chat.length > 0) textToScan += (chat[chat.length - 1].mes || "") + "\n";
-    if (chat.length > 1) textToScan += (chat[chat.length - 2].mes || "") + "\n";
-    textToScan = textToScan.toLowerCase();
-
+// 3.2 ฟังก์ชันสแกนด้วยตัวเอง (ใช้ตอนกดปุ่ม Check)
+const manualScanLorebooks = () => {
     let entries = [];
-    if (context.world_info) {
-        entries = context.world_info;
-    } else if (typeof SillyTavern.world_info !== 'undefined') {
+    if (typeof SillyTavern !== 'undefined' && SillyTavern.world_info) {
         entries = Object.values(SillyTavern.world_info);
     }
+
+    if (!entries.length) return;
+
+    // หาข้อความล่าสุดมาเช็ค
+    let context = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() || {} : {};
+    const chat = context.chat || [];
+    let textToScan = "";
+    if (chat.length > 0) textToScan += (chat[chat.length - 1].mes || "") + "\n";
+    
+    // เอาข้อความที่เรากำลังพิมพ์ด้วย (ถ้ามี)
+    const inputBox = document.getElementById('send_textarea');
+    if (inputBox) textToScan += inputBox.value + "\n";
+    
+    textToScan = textToScan.toLowerCase();
 
     let activeList = [];
     let totalCount = 0;
 
-    if (entries) {
-        entries.forEach(entry => {
-            if (entry.disable) return; // ข้ามอันที่ปิดอยู่
-            
-            totalCount++;
-            
-            // เช็ค Keywords
-            let keys = [];
-            if (Array.isArray(entry.keys)) {
-                keys = entry.keys;
-            } else if (typeof entry.keys === 'string') {
-                keys = entry.keys.split(',').map(k => k.trim()).filter(k => k);
-            } else if (entry.key) {
-                 keys = entry.key.split(',').map(k => k.trim()).filter(k => k);
-            }
+    entries.forEach(entry => {
+        if (entry.disable) return;
+        totalCount++;
 
-            let triggered = null;
-            // เช็คว่า Keywords ตรงกับข้อความล่าสุดไหม
+        let isActivated = false;
+        let triggerWord = "";
+        let strategyIcon = '🟢';
+
+        // 1. Check Constant
+        if (entry.constant || (entry.position && entry.position.includes('constant'))) {
+            isActivated = true;
+            triggerWord = "[Constant]";
+            strategyIcon = '🔵';
+        } 
+        // 2. Check Keys
+        else {
+            let keys = [];
+            if (Array.isArray(entry.keys)) keys = entry.keys;
+            else if (typeof entry.keys === 'string') keys = entry.keys.split(',').map(k => k.trim()).filter(k => k);
+            else if (entry.key) keys = entry.key.split(',').map(k => k.trim()).filter(k => k);
+
             for (let k of keys) {
-                if (textToScan.includes(k.toLowerCase())) {
-                    triggered = k;
+                if (k && textToScan.includes(k.toLowerCase())) {
+                    isActivated = true;
+                    triggerWord = k;
                     break;
                 }
             }
-            
-            // เช็คเงื่อนไข Constant/Always Active
-            const isConstant = entry.constant || (entry.position && entry.position.includes('constant'));
-            
-            if (triggered || isConstant) {
-                activeList.push({
-                    name: entry.comment || entry.name || "Untitled",
-                    trigger: isConstant ? "[Always Active]" : triggered,
-                    content: entry.content
-                });
-            }
-        });
-    }
+        }
+
+        if (isActivated) {
+            activeList.push({
+                name: entry.comment || entry.name || "Untitled",
+                trigger: triggerWord,
+                strategy: strategyIcon,
+                content: entry.content
+            });
+        }
+    });
 
     lorebookState.totalEntries = totalCount;
     lorebookState.activeEntries = activeList;
     lorebookState.activeCount = activeList.length;
 };
 
-// คำนวณ Token
+// 3.3 Calculator เดิม (สำหรับ Token)
 const calculateStats = () => {
     let chat = [];
     let context = {};
@@ -305,9 +322,6 @@ const calculateStats = () => {
     if (currentTotalUsage === 0) {
         currentTotalUsage = messageTokensArray.reduce((a,b) => a + b, 0);
     }
-    
-    // เรียก Scan Lorebook ทุกครั้งที่คำนวณ Stat
-    scanLorebooks();
 
     return {
         savedTokens: totalSaved,
@@ -332,6 +346,10 @@ window.toggleDrag = (type, state) => {
 
 window.toggleLorebookView = () => {
     uiState.showNumpad = !uiState.showNumpad;
+    // ถ้าเปิดขึ้นมา ให้ลอง Manual Scan ทันทีเพื่อความรวดเร็ว
+    if (uiState.showNumpad) {
+        manualScanLorebooks();
+    }
     renderLorebookList(); 
 };
 
@@ -554,7 +572,7 @@ const buildBaseUI = () => {
     ins.innerHTML = `
         <div id="holo-tab-btn" onclick="toggleTabMode()">SYSTEM</div>
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.40</span>
+            <span>🚀 CHRONOS V66.50</span>
             <span id="btn-close-panel" style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
         </div>
         
@@ -592,7 +610,7 @@ const buildBaseUI = () => {
                 </div>
                 
                 <div style="font-size:9px; color:#aaa; margin-top:5px; text-align:right;">
-                    Working: <span style="color:#00E676; font-weight:bold;" id="disp-active-wi">0 / 0</span>
+                    Active WI: <span style="color:#00E676; font-weight:bold;" id="disp-active-wi">0 / 0</span>
                 </div>
             </div>
 
@@ -645,13 +663,19 @@ const renderLorebookList = () => {
         return;
     }
 
-    let html = `<div style="font-size:10px; color:#00E676; margin-bottom:5px;">✅ WORKING (${active.length})</div>`;
+    let html = `<div style="font-size:10px; color:#00E676; margin-bottom:5px;">✅ ACTIVE (${active.length})</div>`;
     
     active.forEach(entry => {
+        // สร้าง HTML ตามสไตล์ที่ขอ (Strategy Icon + Name)
         html += `
-            <div style="background:#1a1a1a; padding:6px; margin-bottom:4px; border-left:2px solid #00E676; font-size:11px;">
-                <div style="color:#fff; font-weight:bold;">${entry.name}</div>
-                <div style="color:#aaa; font-size:9px;">Trig: <span style="color:#E040FB;">${entry.trigger}</span></div>
+            <div style="background:#1a1a1a; padding:6px; margin-bottom:4px; border-left:3px solid #00E676; font-size:11px; display:flex; align-items:flex-start; gap:8px;">
+                <div style="font-size:14px;">${entry.strategy}</div>
+                <div>
+                    <div style="color:#fff; font-weight:bold;">${entry.name}</div>
+                    <div style="color:#aaa; font-size:9px;">
+                        Trigger: <span style="color:#E040FB;">${entry.trigger}</span>
+                    </div>
+                </div>
             </div>
         `;
     });
@@ -703,7 +727,7 @@ const renderFriendBody = () => {
     }
 };
 
-// index.js - Part 5: Update Loop & Styles (Full Code)
+// index.js - Part 5: Update Loop & Styles (Full Un-minified)
 
 // =================================================================
 // 6. UPDATE LOOP & STYLES
@@ -734,6 +758,11 @@ const updateUI = () => {
 
     // 2. อัปเดต Rainbow Progress Bar (Active Lorebooks / Total Lorebooks)
     // สูตรใหม่: (Active / Total) * 100
+    // ดึงค่า total ล่าสุด เผื่อมีการโหลด WI เพิ่ม
+    if (typeof SillyTavern !== 'undefined' && SillyTavern.world_info) {
+        lorebookState.totalEntries = Object.values(SillyTavern.world_info).filter(e => !e.disable).length;
+    }
+
     let percent = lorebookState.totalEntries > 0 
                   ? (lorebookState.activeCount / lorebookState.totalEntries) * 100 
                   : 0;
@@ -1158,102 +1187,4 @@ const createUI = () => {
 };
 
 const makeDraggable = (elm, type, clickCallback) => {
-    let offsetX = 0;
-    let offsetY = 0;
-    let isDragging = false;
-    let hasMoved = false;
-
-    // --- MOUSE EVENTS (PC) ---
-    elm.onmousedown = function(e) {
-        if (e.target.id === 'btn-close-panel') return;
-        if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        
-        e.preventDefault();
-        
-        offsetX = e.clientX - elm.getBoundingClientRect().left;
-        offsetY = e.clientY - elm.getBoundingClientRect().top;
-        isDragging = true;
-        hasMoved = false;
-
-        document.onmousemove = function(e) {
-            if (!isDragging) return;
-            
-            if (type === 'orb' && !dragConfig.orbUnlocked) return;
-            if (type === 'panel' && !dragConfig.panelUnlocked) return;
-
-            hasMoved = true;
-            elm.style.left = (e.clientX - offsetX) + "px";
-            elm.style.top = (e.clientY - offsetY) + "px";
-        };
-
-        document.onmouseup = function() {
-            isDragging = false;
-            document.onmousemove = null;
-            document.onmouseup = null;
-            
-            if (!hasMoved && clickCallback) {
-                clickCallback();
-            }
-        };
-    };
-
-    // --- TOUCH EVENTS (MOBILE) ---
-    elm.addEventListener('touchstart', function(e) {
-        if (e.target.id === 'btn-close-panel') return;
-        if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-
-        e.stopPropagation(); 
-        e.preventDefault();
-
-        const touch = e.touches[0];
-        offsetX = touch.clientX - elm.getBoundingClientRect().left;
-        offsetY = touch.clientY - elm.getBoundingClientRect().top;
-        isDragging = true;
-        hasMoved = false;
-
-    }, { passive: false });
-
-    elm.addEventListener('touchmove', function(e) {
-        if (!isDragging) return;
-        
-        if (type === 'orb' && !dragConfig.orbUnlocked) return;
-        if (type === 'panel' && !dragConfig.panelUnlocked) return;
-        
-        e.preventDefault();
-        e.stopPropagation();
-
-        hasMoved = true;
-        const touch = e.touches[0];
-        elm.style.left = (touch.clientX - offsetX) + "px";
-        elm.style.top = (touch.clientY - offsetY) + "px";
-        
-    }, { passive: false });
-
-    elm.addEventListener('touchend', function(e) {
-        isDragging = false;
-        
-        if (!hasMoved && clickCallback) {
-            clickCallback();
-        }
-    });
-};
-
-// Start Extension
-(function() {
-    injectStyles();
     
-    setTimeout(createUI, 2000); 
-    
-    if (typeof SillyTavern !== 'undefined' && SillyTavern.extension_manager) {
-        SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
-        SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-    }
-    
-    setInterval(() => {
-        const ins = document.getElementById('chronos-inspector');
-        if (ins && (ins.style.display === 'block' || ins.style.display === 'flex')) {
-            updateUI();
-        }
-    }, 2000);
-})();
-            
