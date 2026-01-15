@@ -1,7 +1,7 @@
-// index.js - Chronos V66.35 (Lorebook Corrected)
+// index.js - Chronos V66.40 (Decoration Restored & Lorebook Bar)
 // Part 1: Config & Data
 
-const extensionName = "Chronos_Ultimate_V35";
+const extensionName = "Chronos_Ultimate_V40";
 
 // =================================================================
 // 0. HIDDEN PROMPTS
@@ -33,7 +33,7 @@ let dragConfig = {
 };
 
 let uiState = {
-    showNumpad: false, // ใช้เป็นตัว Toggle เปิด List Lorebook
+    showNumpad: false, // ใช้ Toggle List Lorebook
     viewingId: null,
     numpadValue: "ID...",
     isPanelBuilt: false,
@@ -69,7 +69,8 @@ let lastRenderData = {
     load: -1,
     max: -1,
     msgCount: -1,
-    activeLore: -1
+    activeLore: -1,
+    totalLore: -1
 };
 
 // --- Storage Functions ---
@@ -176,13 +177,12 @@ const scanLorebooks = () => {
                 }
             }
             
-            // เพิ่ม: เช็คเงื่อนไข Constant/Always Active
             const isConstant = entry.constant || (entry.position && entry.position.includes('constant'));
             
             if (triggered || isConstant) {
                 activeList.push({
                     name: entry.comment || entry.name || "Untitled",
-                    trigger: isConstant ? "[Always Active]" : triggered,
+                    trigger: isConstant ? "[Constant]" : triggered,
                     content: entry.content
                 });
             }
@@ -192,9 +192,11 @@ const scanLorebooks = () => {
     lorebookState.totalEntries = totalCount;
     lorebookState.activeEntries = activeList;
     lorebookState.activeCount = activeList.length;
+    
+    return lorebookState;
 };
 
-// คำนวณ Token และ Context (แบบเดิม)
+// คำนวณ Token
 const calculateStats = () => {
     let chat = [], context = {};
     if (typeof SillyTavern !== 'undefined') {
@@ -202,12 +204,10 @@ const calculateStats = () => {
         chat = context.chat || [];
     }
 
-    const maxTokens = findMaxContext(context);
     const tokenizer = getChronosTokenizer();
     const quickCount = (text) => tokenizer ? tokenizer.encode(text).length : Math.ceil((text||"").length / 3);
 
     let totalSaved = 0;
-    let messageTokensArray = [];
 
     chat.forEach((msg) => {
         const rawMsg = msg.mes || "";
@@ -218,21 +218,18 @@ const calculateStats = () => {
             cleanCount = quickCount(`[System Content:\n${cleanText}]`);
             if (rawCount > cleanCount) totalSaved += (rawCount - cleanCount);
         }
-        messageTokensArray.push(cleanCount);
     });
 
-    let currentTotalUsage = context.tokens || messageTokensArray.reduce((a,b) => a + b, 0);
-    
-    // เรียก Scan Lorebook ทุกครั้งที่คำนวณ Stat
+    // เรียก Scan Lorebook ทุกครั้ง
     scanLorebooks();
 
     return {
         savedTokens: totalSaved,
-        max: maxTokens,
-        currentLoad: currentTotalUsage
+        totalMsgs: chat.length
     };
 };
-    // index.js - Part 3: Interaction
+
+// index.js - Part 3: Interaction
 
 // =================================================================
 // 4. INTERACTION
@@ -317,6 +314,7 @@ window.toggleTabMode = () => {
     if (controls) controls.style.display = uiState.friendMode ? 'none' : 'flex';
     if (tabBtn) {
         tabBtn.innerText = uiState.friendMode ? 'STATS' : 'SYSTEM';
+        tabBtn.style.color = '#00E676';
         tabBtn.style.boxShadow = uiState.friendMode ? '0 -5px 15px rgba(0, 230, 118, 0.4)' : '0 -4px 10px rgba(0, 230, 118, 0.2)';
     }
     if (uiState.friendMode) renderFriendBody();
@@ -332,7 +330,7 @@ window.sendFriendMsg = async () => {
     friendChatHistory.push({ role: 'user', content: `[message] ${txt}` });
     generateHiddenSummary(txt);
     
-    // Basic Friend Logic (Shortened for copy paste)
+    // Basic Friend Logic
     let sys = BASE_FRIEND_PROMPT + "\n[Chars]:";
     if (uiState.chatMode === 'group') globalData.characters.forEach(c => sys += `\n${c.name} (${c.personality})`);
     else { const c = globalData.characters.find(x=>x.id===uiState.selectedCharId); if(c) sys += `\n${c.name} (${c.personality})`; }
@@ -347,7 +345,8 @@ window.sendFriendMsg = async () => {
     } catch(e) { document.getElementById(loadId).innerText = "Err"; }
     log.scrollTop = log.scrollHeight;
 };
-    // index.js - Part 4: UI Renderer
+
+// index.js - Part 4: UI Renderer
 
 // =================================================================
 // 5. CORE RENDERER
@@ -360,7 +359,7 @@ const buildBaseUI = () => {
     ins.innerHTML = `
         <div id="holo-tab-btn" onclick="toggleTabMode()">SYSTEM</div>
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.35</span>
+            <span>🚀 CHRONOS V66.40</span>
             <span id="btn-close-panel" style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
         </div>
         
@@ -389,16 +388,17 @@ const buildBaseUI = () => {
                 </div>
                 
                 <div class="dash-row" style="align-items:center; cursor:pointer;" onclick="toggleLorebookView()">
-                    <span style="color:#fff;">📘 Lorebook Check</span>
-                    <button style="background:#330044; border:1px solid #D500F9; color:#fff; font-size:10px; padding:2px 8px; cursor:pointer;">VIEW</button>
+                    <span style="color:#fff;">📘 Check Lorebook</span>
+                    <button style="background:#330044; border:1px solid #D500F9; color:#fff; font-size:10px; padding:2px 8px; cursor:pointer;">VIEW LIST</button>
                 </div>
                 
                 <div class="progress-container">
                     <div class="progress-bar" id="disp-bar" style="width: 0%"></div>
                 </div>
                 
-                <div style="font-size:9px; color:#aaa; margin-top:5px; text-align:right;">
-                    Active WI: <span style="color:#00E676; font-weight:bold;" id="disp-active-wi">0</span>
+                <div class="dash-row" style="margin-top:5px;">
+                     <span style="font-size:9px; color:#aaa;">Entries Active : Total</span>
+                     <span style="font-size:11px; color:#00E676; font-weight:bold;" id="disp-lore-ratio">0 : 0</span>
                 </div>
             </div>
 
@@ -463,7 +463,7 @@ const renderFriendBody = () => {
     }
 };
 
-// index.js - Part 5: Update Loop & Styles
+// index.js - Part 5: Update Loop & Full CSS
 
 const updateUI = () => {
     const ins = document.getElementById('chronos-inspector');
@@ -475,32 +475,32 @@ const updateUI = () => {
     const stats = calculateStats();
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
-    // 1. อัปเดต Saved Tokens (แบบเก่า)
+    // 1. อัปเดต Saved Tokens
     if (stats.savedTokens !== lastRenderData.saved) {
         const el = document.getElementById('disp-saved');
         if (el) el.innerText = `${fmt(stats.savedTokens)} T`;
         lastRenderData.saved = stats.savedTokens;
     }
 
-    // 2. อัปเดต Progress Bar (Context Load แบบเก่า)
-    let percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
-    if (Math.abs(percent - lastRenderData.load) > 0.5) {
+    // 2. อัปเดต Lorebook Bar & Ratio (Active : Total)
+    if (lorebookState.activeCount !== lastRenderData.activeLore || lorebookState.totalEntries !== lastRenderData.totalLore) {
+        // อัปเดตข้อความ "5 : 20"
+        const elRatio = document.getElementById('disp-lore-ratio');
+        if (elRatio) elRatio.innerText = `${lorebookState.activeCount} : ${lorebookState.totalEntries}`;
+        
+        // อัปเดตหลอดสีรุ้ง
+        let percent = lorebookState.totalEntries > 0 ? (lorebookState.activeCount / lorebookState.totalEntries) * 100 : 0;
         const elBar = document.getElementById('disp-bar');
         if (elBar) elBar.style.width = `${percent}%`;
-        lastRenderData.load = percent;
-    }
 
-    // 3. อัปเดต Active Lorebooks Count (ตรง Total Msg เดิม)
-    if (lorebookState.activeCount !== lastRenderData.activeLore) {
-        const elActive = document.getElementById('disp-active-wi');
-        if (elActive) elActive.innerText = fmt(lorebookState.activeCount);
         lastRenderData.activeLore = lorebookState.activeCount;
+        lastRenderData.totalLore = lorebookState.totalEntries;
     }
 
-    // 4. รีเฟรชหน้า List Lorebook ถ้าเปิดอยู่
+    // 3. รีเฟรชหน้า List Lorebook ถ้าเปิดอยู่
     if (uiState.showNumpad) renderLorebookList();
 
-    // 5. Render Message List (เหมือนเดิม)
+    // 4. Render Message List (คืนค่าระบบแชท)
     renderListSection();
 };
 
@@ -531,12 +531,14 @@ const renderViewerSection = () => {
     }
 };
 
+// คืนค่า CSS เต็มรูปแบบเพื่อการตกแต่งที่สวยงาม
 const injectStyles = () => {
     const exist = document.getElementById('chronos-style');
     if (exist) exist.remove();
     const style = document.createElement('style');
     style.id = 'chronos-style';
     style.innerHTML = `
+        /* --- ORB --- */
         #chronos-orb {
             position: fixed; top: 150px; right: 20px; width: 38px; height: 38px;
             background: radial-gradient(circle, rgba(20,0,30,0.95) 0%, rgba(0,0,0,1) 100%);
@@ -547,6 +549,8 @@ const injectStyles = () => {
         }
         #chronos-orb.active { border-color: #00E676 !important; color: #00E676 !important; box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676 !important; transform: scale(1.1); }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* --- WINDOW --- */
         #chronos-inspector {
             position: fixed; top: 80px; right: 70px; width: 320px;
             background: rgba(10, 10, 12, 0.98); border: 1px solid #D500F9; border-top: 3px solid #D500F9;
@@ -557,23 +561,34 @@ const injectStyles = () => {
         #holo-tab-btn {
             position: absolute; top: -24px; right: 20px; background: #000; color: #00E676; font-size: 11px;
             font-weight: 800; padding: 4px 15px; border-radius: 4px 4px 0 0; border: 1px solid #00E676; border-bottom: none; z-index: 10; cursor: pointer;
+            box-shadow: 0 -4px 10px rgba(0, 230, 118, 0.2); transition: 0.2s;
         }
-        .ins-header { background: linear-gradient(90deg, #4A0072, #2a0040); color: #fff; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #D500F9; touch-action: none !important; }
+        #holo-tab-btn:hover { text-shadow: 0 0 5px #00E676; box-shadow: 0 -5px 15px rgba(0, 230, 118, 0.5); }
+        .ins-header { background: linear-gradient(90deg, #4A0072, #2a0040); color: #fff; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #D500F9; touch-action: none !important; user-select: none; }
+        
+        /* --- CONTROLS --- */
         .control-zone { display: flex; gap: 15px; padding: 10px; background: #150518; border-bottom: 1px solid #330044; align-items: center; }
         .switch-row { display: flex; align-items: center; gap: 8px; } .switch-label { font-size: 11px; color: #ccc; }
         .neon-switch { position: relative; display: inline-block; width: 30px; height: 16px; } .neon-switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 16px; border: 1px solid #555; }
         .slider:before { position: absolute; content: ""; height: 10px; width: 10px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
         input:checked + .slider { background-color: #2a0040; border-color: #00E676; } input:checked + .slider:before { transform: translateX(14px); background-color: #00E676; box-shadow: 0 0 5px #00E676; }
+        
+        /* --- DASHBOARD --- */
         .dashboard-zone { background: #050505; padding: 15px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
         .dash-val { font-weight: bold; font-size: 13px; }
+        
+        /* --- RAINBOW BAR --- */
         .progress-container { width: 100%; height: 6px; background: #222; border-radius: 3px; margin-top: 8px; overflow: hidden; }
         .progress-bar { height: 100%; background: linear-gradient(90deg, #D500F9, #00E676); width: 0%; transition: width 0.4s ease-out; }
+        
+        /* --- LIST & FRIEND --- */
         .ins-body { padding: 10px; background: #111; max-height: 400px; overflow-y: auto; }
         .mode-btn { background: #111; border: 1px solid #444; color: #aaa; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; }
+        .mode-btn.active { background: #222; border-color: #fff; color: #fff; box-shadow: 0 0 5px rgba(255,255,255,0.2); }
         .msg-list { max-height: 120px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #0a0a0a; border-radius: 4px; }
-        .msg-item { padding: 8px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; border-left: 3px solid transparent; }
+        .msg-item { padding: 8px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; border-left: 3px solid transparent; transition: 0.2s; }
         .msg-item:hover { background: #330044; color: #fff; }
         .msg-active { background: linear-gradient(90deg, #330044, #1a0520); color: #fff; border-left: 3px solid #00E676; transform: translateX(6px); }
         .viewer-container { margin-bottom: 10px; border: 1px solid #D500F9; border-radius: 4px; background: #080808; overflow: hidden; }
