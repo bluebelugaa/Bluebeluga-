@@ -1,4 +1,4 @@
-// index.js - Chronos V66.30 (Touch Fix Final - Modified)
+// index.js - Chronos V66.30 (Touch Fix Re-Logic)
 // Part 1: Config & Data
 
 const extensionName = "Chronos_Ultimate_V30";
@@ -27,10 +27,10 @@ You are roleplaying as the specific characters defined by the user.
 // 1. STATE & STORAGE MANAGEMENT
 // =================================================================
 
-// แก้ไข: เปิดให้ขยับได้ตั้งแต่เริ่ม (True)
+// แก้ไข: ตั้งเป็น False (ล็อก) เพื่อให้เปิดมาขยับไม่ได้ ต้องติ๊กก่อนถึงจะขยับ
 let dragConfig = {
-    orbUnlocked: true,
-    panelUnlocked: true
+    orbUnlocked: false, 
+    panelUnlocked: false 
 };
 
 let uiState = {
@@ -269,17 +269,18 @@ const calculateStats = () => {
         currentLoad: currentTotalUsage
     };
 };
-
 // index.js - Part 3: Interaction & Chat System
 
 // =================================================================
 // 4. INTERACTION
 // =================================================================
 
-// แก้ไข: เพิ่มฟังก์ชัน toggleDrag ที่ขาดหายไป
+// ฟังก์ชัน Toggle Drag
 window.toggleDrag = (type, state) => {
     if (type === 'orb') {
         dragConfig.orbUnlocked = state;
+        const orb = document.getElementById('chronos-orb');
+        if(orb) orb.style.borderColor = state ? '#00E676' : '#D500F9';
     } else if (type === 'panel') {
         dragConfig.panelUnlocked = state;
     }
@@ -531,8 +532,7 @@ window.sendFriendMsg = async () => {
     
     log.scrollTop = log.scrollHeight;
 };
-
-// index.js - Part 4: UI Renderer
+        // index.js - Part 4: UI Renderer
 
 // =================================================================
 // 5. CORE RENDERER (UI GENERATION)
@@ -657,7 +657,6 @@ const renderFriendBody = () => {
         </div>`;
     }
 };
-
 const updateUI = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') {
@@ -791,8 +790,7 @@ const renderViewerSection = () => {
         `;
     }
 };
-
-// index.js - Part 5: Styles & Init (Native Touch Fix)
+// index.js - Part 5: Styles & Init (Fixed Logic for Click vs Drag)
 
 // =================================================================
 // 6. STYLES & INIT
@@ -810,19 +808,18 @@ const injectStyles = () => {
             position: fixed;
             top: 150px;
             right: 20px;
-            /* แก้ไข: ลดขนาดจาก 50px เป็น 38px */
+            /* แก้ไข: ลดขนาดเหลือ 38px */
             width: 38px;
             height: 38px;
             background: radial-gradient(circle, rgba(20,0,30,0.95) 0%, rgba(0,0,0,1) 100%);
             border: 2px solid #D500F9;
             border-radius: 50%;
-            /* Z-Index สูงกว่าหน้าต่าง 1 แต้ม เพื่อกันโดนบัง */
             z-index: 2147483648; 
             cursor: move;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 18px; /* ลด Font ตามขนาด */
+            font-size: 18px; 
             color: #E040FB;
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6);
             animation: spin-slow 4s linear infinite;
@@ -858,7 +855,6 @@ const injectStyles = () => {
             font-family: 'Consolas', monospace;
             font-size: 12px;
             display: none;
-            /* Z-Index ต่ำกว่าลูกแก้ว */
             z-index: 2147483647; 
             border-radius: 8px;
             box-shadow: 0 20px 60px rgba(0,0,0,0.9);
@@ -894,7 +890,7 @@ const injectStyles = () => {
         .ins-header {
             background: linear-gradient(90deg, #4A0072, #2a0040);
             color: #fff;
-            padding: 15px; /* เพิ่มพื้นที่แตะหัวข้อ */
+            padding: 15px;
             font-weight: bold;
             display: flex;
             justify-content: space-between;
@@ -1177,7 +1173,7 @@ const injectStyles = () => {
 };
 
 // =================================================================
-// 7. INITIALIZATION (OLD SCHOOL TOUCH LOGIC - MOST STABLE)
+// 7. INITIALIZATION & DRAG LOGIC
 // =================================================================
 
 const createUI = () => {
@@ -1197,17 +1193,8 @@ const createUI = () => {
     document.body.appendChild(orb); 
     document.body.appendChild(ins);
     
-    // Toggle Event (Separate from Drag)
-    let isDragOperation = false;
-
-    // เราใช้ Event ง่ายๆ เพื่อเปิดปิด (ทำงานตอนปล่อยนิ้ว)
-    orb.addEventListener('click', (e) => {
-        // ถ้าเพิ่งลากเสร็จ ห้ามเปิดหน้าต่าง
-        if (isDragOperation) {
-            isDragOperation = false;
-            return;
-        }
-        
+    // ฟังก์ชันเปิด/ปิดหน้าต่าง
+    const togglePanel = () => {
         if (ins.style.display === 'none' || ins.style.display === '') {
             ins.style.display = 'block';
             orb.classList.add('active'); 
@@ -1216,90 +1203,94 @@ const createUI = () => {
             ins.style.display = 'none';
             orb.classList.remove('active');
         }
-    });
-    
-    // Helper to set dragging state for the click handler
-    const setDragState = (state) => {
-        isDragOperation = state;
     };
-
-    // Apply Drag Logic
-    makeDraggable(orb, 'orb', setDragState); 
-    makeDraggable(ins, 'panel', setDragState);
+    
+    // ติดตั้งระบบ Drag ที่รองรับการคลิกด้วย
+    makeDraggable(orb, 'orb', togglePanel); 
+    makeDraggable(ins, 'panel', null); // หน้าต่างไม่ต้องมีคลิก
 };
 
-const makeDraggable = (elm, type, setDragStateCallback) => {
+const makeDraggable = (elm, type, clickCallback) => {
     let offsetX = 0;
     let offsetY = 0;
     let isDragging = false;
+    let hasMoved = false; // ตัวแปรสำคัญ: เช็คว่าขยับจริงไหม
 
     // --- MOUSE EVENTS (PC) ---
     elm.onmousedown = function(e) {
-        if (type === 'orb' && !dragConfig.orbUnlocked) return;
-        if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-
+        
         e.preventDefault();
         
-        // Calculate offset from the element's top-left corner
         offsetX = e.clientX - elm.getBoundingClientRect().left;
         offsetY = e.clientY - elm.getBoundingClientRect().top;
         isDragging = true;
+        hasMoved = false;
 
         document.onmousemove = function(e) {
             if (!isDragging) return;
+            
+            // เช็ค Config: ถ้าไม่ได้เปิดสวิตช์ ห้ามขยับ
+            if (type === 'orb' && !dragConfig.orbUnlocked) return;
+            if (type === 'panel' && !dragConfig.panelUnlocked) return;
+
+            hasMoved = true;
             elm.style.left = (e.clientX - offsetX) + "px";
             elm.style.top = (e.clientY - offsetY) + "px";
-            if (setDragStateCallback) setDragStateCallback(true);
         };
 
         document.onmouseup = function() {
             isDragging = false;
             document.onmousemove = null;
             document.onmouseup = null;
-            // Delay resetting drag state to prevent click trigger
-            setTimeout(() => { if (setDragStateCallback) setDragStateCallback(false); }, 100);
+            
+            // ถ้าปล่อยเมาส์โดยที่ไม่ได้ขยับเลย = คลิก
+            if (!hasMoved && clickCallback) {
+                clickCallback();
+            }
         };
     };
 
-    // --- TOUCH EVENTS (MOBILE - AGGRESSIVE) ---
+    // --- TOUCH EVENTS (MOBILE) ---
     elm.addEventListener('touchstart', function(e) {
-        if (type === 'orb' && !dragConfig.orbUnlocked) return;
-        if (type === 'panel' && !dragConfig.panelUnlocked) return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
 
-        // STOP SILLY TAVERN FROM INTERFERING
+        // กัน Scroll และกัน event อื่นแทรก
         e.stopPropagation(); 
-        // STOP SCROLLING
         e.preventDefault();
 
         const touch = e.touches[0];
         offsetX = touch.clientX - elm.getBoundingClientRect().left;
         offsetY = touch.clientY - elm.getBoundingClientRect().top;
         isDragging = true;
+        hasMoved = false;
 
-    }, { passive: false }); // Important: passive: false allows preventDefault
+    }, { passive: false });
 
     elm.addEventListener('touchmove', function(e) {
         if (!isDragging) return;
         
-        // STOP SCROLLING
+        // เช็ค Config: ถ้าล็อกอยู่ ห้ามขยับ
+        if (type === 'orb' && !dragConfig.orbUnlocked) return;
+        if (type === 'panel' && !dragConfig.panelUnlocked) return;
+        
         e.preventDefault();
         e.stopPropagation();
 
+        hasMoved = true;
         const touch = e.touches[0];
-        // Direct assignment - fastest for mobile
         elm.style.left = (touch.clientX - offsetX) + "px";
         elm.style.top = (touch.clientY - offsetY) + "px";
         
-        if (setDragStateCallback) setDragStateCallback(true);
-
     }, { passive: false });
 
     elm.addEventListener('touchend', function(e) {
         isDragging = false;
-        // Delay resetting drag state
-        setTimeout(() => { if (setDragStateCallback) setDragStateCallback(false); }, 100);
+        
+        // ถ้าปล่อยนิ้วโดยที่ไม่ได้ขยับเลย = คลิก
+        if (!hasMoved && clickCallback) {
+            clickCallback();
+        }
     });
 };
 
@@ -1321,4 +1312,3 @@ const makeDraggable = (elm, type, setDragStateCallback) => {
         }
     }, 2000);
 })();
-
