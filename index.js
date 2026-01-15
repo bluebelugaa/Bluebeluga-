@@ -1,4 +1,4 @@
-// index.js - Chronos V66.30 (Touch Fix + Close Button Fix)
+// index.js - Chronos V66.30 (Lorebook Inspector Edition)
 // Part 1: Config & Data
 
 const extensionName = "Chronos_Ultimate_V30";
@@ -33,7 +33,7 @@ let dragConfig = {
 };
 
 let uiState = {
-    showNumpad: false,
+    showNumpad: false, // ใช้เป็นตัว Toggle ดู Lorebook ทั้งหมดแทน
     viewingId: null,
     numpadValue: "ID...",
     isPanelBuilt: false,
@@ -42,6 +42,13 @@ let uiState = {
     chatMode: 'group',
     selectedCharId: null,
     editingCharId: null
+};
+
+// เก็บข้อมูล Lorebook ชั่วคราว
+let lorebookState = {
+    totalEntries: 0,
+    activeEntries: [],
+    lastScanText: ""
 };
 
 let globalData = {
@@ -127,7 +134,7 @@ const stripHtmlToText = (html) => {
     return text;
 };
 
-// index.js - Part 2: Logic Core
+// index.js - Part 2: Logic Core (Lorebook Scanner)
 
 // =================================================================
 // 2. HOOKS
@@ -158,117 +165,99 @@ const optimizePayload = (data) => {
 };
 
 // =================================================================
-// 3. CALCULATOR
+// 3. LOREBOOK SCANNER LOGIC
 // =================================================================
 
-const findMaxContext = (contextObj) => {
-    let max = 0;
-    
-    if (contextObj.max_context && contextObj.max_context > 0) {
-        max = parseInt(contextObj.max_context);
-    } else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) {
-        max = parseInt(SillyTavern.settings.context_size);
-    }
-    
-    if (max === 0 && typeof window.settings !== 'undefined' && window.settings.context_size) {
-        max = parseInt(window.settings.context_size);
-    }
-    
-    if (max === 0) {
-        max = 4096;
-    }
-    
-    return max;
-};
-
-const calculateStats = () => {
-    let chat = [];
+const scanLorebooks = () => {
+    // ดึงข้อมูล Context
     let context = {};
-    
     if (typeof SillyTavern !== 'undefined') {
         context = SillyTavern.getContext() || {};
-        chat = context.chat || [];
-    } else if (typeof window.chat !== 'undefined') {
-        chat = window.chat;
     }
 
-    if (!chat || chat.length === 0) {
-        return { 
-            savedTokens: 0, 
-            rangeLabel: "Waiting...", 
-            max: 0, 
-            totalMsgs: 0, 
-            currentLoad: 0 
-        };
-    }
-
-    const maxTokens = findMaxContext(context);
-    const tokenizer = getChronosTokenizer();
+    // 1. ดึงข้อความล่าสุดมาเช็ค Trigger
+    const chat = context.chat || [];
+    let textToScan = "";
+    // เอา 2 ข้อความล่าสุดมาเช็ค (เผื่อ AI ตอบแล้วมันไปทริกเกอร์อันใหม่)
+    if (chat.length > 0) textToScan += (chat[chat.length - 1].mes || "") + "\n";
+    if (chat.length > 1) textToScan += (chat[chat.length - 2].mes || "") + "\n";
     
-    const quickCount = (text) => {
-        if (!text) {
-            return 0;
-        }
-        if (tokenizer && typeof tokenizer.encode === 'function') {
-            return tokenizer.encode(text).length;
-        }
-        return Math.ceil(text.length / 3);
-    };
+    textToScan = textToScan.toLowerCase();
 
-    let totalSaved = 0;
-    let messageTokensArray = []; 
+    // 2. ดึง World Info (Lorebook)
+    // SillyTavern เก็บ WI ไว้ใน context.world_info หรือตัวแปร global
+    let entries = [];
+    if (context.world_info) {
+        entries = context.world_info; // แบบใหม่
+    } else if (typeof SillyTavern.world_info !== 'undefined') {
+        // แปลง Object เป็น Array ถ้าจำเป็น
+        entries = Object.values(SillyTavern.world_info);
+    }
 
-    chat.forEach((msg) => {
-        const rawMsg = msg.mes || "";
-        let rawCount = quickCount(rawMsg);
-        let cleanCount = 0;
+    if (!entries || entries.length === 0) {
+        return { total: 0, active: [] };
+    }
+
+    let activeList = [];
+    let totalCount = 0;
+
+    entries.forEach(entry => {
+        // เช็คว่า Lorebook นี้เปิดใช้งานไหม (disable หรือเปล่า)
+        if (entry.disable) return;
         
-        if (/<[^>]+>|&lt;[^&]+&gt;/.test(rawMsg)) {
-            const cleanText = stripHtmlToText(rawMsg);
-            const formattedClean = `[System Content:\n${cleanText}]`;
-            cleanCount = quickCount(formattedClean);
-            
-            if (rawCount > cleanCount) {
-                totalSaved += (rawCount - cleanCount);
+        totalCount++;
+
+        // 3. เช็ค Keys (คำทริกเกอร์)
+        // keys อาจจะเป็น string ขั้นด้วย , หรือ array
+        let keys = [];
+        if (Array.isArray(entry.keys)) {
+            keys = entry.keys;
+        } else if (typeof entry.keys === 'string') {
+            keys = entry.keys.split(',').map(k => k.trim()).filter(k => k);
+        } else if (entry.key) {
+             keys = entry.key.split(',').map(k => k.trim()).filter(k => k);
+        }
+
+        // หาว่าคำไหนทริกเกอร์
+        let triggeredBy = null;
+        for (let k of keys) {
+            const cleanKey = k.toLowerCase();
+            // เช็คแบบง่าย (Includes)
+            if (textToScan.includes(cleanKey)) {
+                triggeredBy = k;
+                break;
             }
-        } else {
-            cleanCount = rawCount;
         }
-        
-        messageTokensArray.push(cleanCount);
+
+        // 4. ถ้าเจอว่าทริกเกอร์ ให้เก็บลง List
+        if (triggeredBy) {
+            activeList.push({
+                name: entry.comment || entry.name || "Untitled",
+                trigger: triggeredBy,
+                content: entry.content
+            });
+        }
     });
 
-    let currentTotalUsage = context.tokens || 0;
-    if (currentTotalUsage === 0) {
-        currentTotalUsage = messageTokensArray.reduce((a,b) => a + b, 0);
-    }
-
-    let rangeLabel = "...";
-    let startIndex = 0;
-    let endIndex = chat.length - 1;
-    let accumulated = 0;
-    
-    for (let i = chat.length - 1; i >= 0; i--) {
-        let t = messageTokensArray[i];
-        if (accumulated + t < maxTokens) {
-            accumulated += t;
-            startIndex = i;
-        } else {
-            break;
-        }
-    }
-    
-    rangeLabel = `#${startIndex} ➔ #${endIndex}`;
+    lorebookState.totalEntries = totalCount;
+    lorebookState.activeEntries = activeList;
 
     return {
-        savedTokens: totalSaved,
-        rangeLabel: rangeLabel,
-        max: maxTokens,
-        totalMsgs: chat.length,
-        currentLoad: currentTotalUsage
+        total: totalCount,
+        active: activeList
     };
 };
-    // index.js - Part 3: Interaction & Chat System
+
+// ฟังก์ชันเดิมแต่ลดรูป ไว้แค่เช็คจำนวนข้อความเฉยๆ
+const calculateStats = () => {
+    let chat = [];
+    if (typeof SillyTavern !== 'undefined') {
+        chat = SillyTavern.getContext()?.chat || [];
+    }
+    return { totalMsgs: chat.length };
+};
+
+// index.js - Part 3: Interaction & Chat System
 
 // =================================================================
 // 4. INTERACTION
@@ -277,82 +266,35 @@ const calculateStats = () => {
 window.toggleDrag = (type, state) => {
     if (type === 'orb') {
         dragConfig.orbUnlocked = state;
-        // เอาการเปลี่ยนสีตรงนี้ออก เพื่อให้ CSS จัดการเอง
     } else if (type === 'panel') {
         dragConfig.panelUnlocked = state;
     }
 };
 
-window.toggleNumpad = () => {
+// เปลี่ยนจาก Numpad เป็นปุ่มเปิดดู Lorebook ทั้งหมด (ถ้าต้องการ)
+window.toggleLorebookView = () => {
+    // ใช้ uiState.showNumpad แทนตัวแปร Lorebook Toggle ชั่วคราว
     uiState.showNumpad = !uiState.showNumpad;
-    renderNumpadSection(); 
-};
-
-window.numpadType = (num) => {
-    let current = uiState.numpadValue;
-    if (current === "ID...") {
-        current = "";
-    }
-    
-    if (current.length < 5) {
-        uiState.numpadValue = current + num;
-        updateNumpadDisplay();
-    }
-};
-
-window.numpadDel = () => {
-    let current = uiState.numpadValue;
-    if (current === "ID..." || current.length === 0) {
-        return;
-    }
-    
-    uiState.numpadValue = current.slice(0, -1);
-    
-    if (uiState.numpadValue === "") {
-        uiState.numpadValue = "ID...";
-    }
-    updateNumpadDisplay();
-};
-
-window.numpadGo = () => {
-    const val = uiState.numpadValue;
-    if (val === "ID..." || val === "") {
-        return;
-    }
-    
-    const id = parseInt(val);
-    window.setViewingId(id);
+    renderLorebookSection(); 
 };
 
 window.setViewingId = (id) => {
     let chat = SillyTavern.getContext()?.chat || [];
-    
-    if (isNaN(id) || id < 0 || id >= chat.length) {
-        return;
-    }
-    
+    if (isNaN(id) || id < 0 || id >= chat.length) return;
     uiState.viewingId = id;
     renderViewerSection();
-    renderListSection();
 };
 
 window.closeViewer = () => {
     uiState.viewingId = null;
     renderViewerSection();
-    renderListSection();
 };
 
 window.closePanel = () => { 
     const ins = document.getElementById('chronos-inspector');
     const orb = document.getElementById('chronos-orb');
-    
-    if (ins) {
-        ins.style.display = 'none';
-    }
-    
-    if (orb) {
-        orb.classList.remove('active'); 
-    }
+    if (ins) ins.style.display = 'none';
+    if (orb) orb.classList.remove('active'); 
 };
 
 // --- Character Settings Logic ---
@@ -366,15 +308,9 @@ window.saveNewCharacter = () => {
     const name = document.getElementById('new-char-name').value;
     const color = document.getElementById('new-char-color').value;
     const desc = document.getElementById('new-char-desc').value;
-    
     if (name && desc) {
         const newId = Date.now();
-        globalData.characters.push({ 
-            id: newId, 
-            name: name, 
-            color: color, 
-            personality: desc 
-        });
+        globalData.characters.push({ id: newId, name: name, color: color, personality: desc });
         saveGlobalData();
         renderFriendBody();
     }
@@ -401,26 +337,17 @@ const generateHiddenSummary = async (chatText) => {
                 { role: 'system', content: HIDDEN_SUMMARY_PROMPT },
                 { role: 'user', content: `Analyze this chat: ${chatText}` }
             ];
-            
             const result = await SillyTavern.Generate(summaryPayload, { quiet: true });
-            
-            globalData.routes[globalData.currentRouteId] = { 
-                summary: result, 
-                timestamp: Date.now() 
-            };
-            
+            globalData.routes[globalData.currentRouteId] = { summary: result, timestamp: Date.now() };
             saveGlobalData();
         }
-    } catch(e) { 
-        console.error("Summary Failed:", e); 
-    }
+    } catch(e) { console.error("Summary Failed:", e); }
 };
 
 // --- Tab Switching Logic ---
 
 window.toggleTabMode = () => {
     uiState.friendMode = !uiState.friendMode;
-    
     const normalView = document.getElementById('view-normal');
     const friendView = document.getElementById('view-friend');
     const controls = document.getElementById('panel-controls');
@@ -436,11 +363,7 @@ window.toggleTabMode = () => {
         }
         
         if (controls) {
-            if (uiState.friendMode) {
-                controls.style.display = 'none';
-            } else {
-                controls.style.display = 'flex';
-            }
+            controls.style.display = uiState.friendMode ? 'none' : 'flex';
         }
         
         if (uiState.friendMode) {
@@ -451,7 +374,6 @@ window.toggleTabMode = () => {
     if (tabBtn) {
         tabBtn.innerText = uiState.friendMode ? 'STATS' : 'SYSTEM';
         tabBtn.style.color = '#00E676';
-        
         if (uiState.friendMode) {
              tabBtn.style.boxShadow = '0 -5px 15px rgba(0, 230, 118, 0.4)';
         } else {
@@ -464,21 +386,16 @@ window.sendFriendMsg = async () => {
     const input = document.getElementById('friend-input');
     const log = document.getElementById('friend-log');
     const txt = input.value.trim();
-    
     if (!txt) return;
-    
     input.value = ''; 
 
     log.innerHTML += `<div style="margin-bottom:6px; text-align:right; padding:6px; background:#333; border-radius:4px; color:#aaa;"><b>Op:</b> ${txt}</div>`;
-    
     friendChatHistory.push({ role: 'user', content: `[message] ${txt}` });
-    
     log.scrollTop = log.scrollHeight;
 
     generateHiddenSummary(txt);
 
     let dynamicSystemPrompt = BASE_FRIEND_PROMPT + "\n\n[Active Characters]:\n";
-    
     if (uiState.chatMode === 'group') {
         globalData.characters.forEach(c => {
             dynamicSystemPrompt += `- Name: ${c.name} (Color: ${c.color})\n  Personality: ${c.personality}\n`;
@@ -494,15 +411,13 @@ window.sendFriendMsg = async () => {
 
     const currentSummary = globalData.routes[globalData.currentRouteId]?.summary || "No prior data.";
     dynamicSystemPrompt += `\n\n[Global Memory]:\n${currentSummary}`;
-
     const context = SillyTavern.getContext();
     const lastMsg = context.chat && context.chat.length > 0 ? context.chat[context.chat.length-1] : { name: '?', mes: '' };
-    const cleanMes = stripHtmlToText(lastMsg.mes);
     
     const payload = [
         { role: 'system', content: dynamicSystemPrompt },
         ...friendChatHistory,
-        { role: 'user', content: `(Story Context: ${lastMsg.name}: ${cleanMes})\n\n[message] ${txt}` }
+        { role: 'user', content: `(Story Context: ${lastMsg.name}: ${stripHtmlToText(lastMsg.mes)})\n\n[message] ${txt}` }
     ];
 
     const loadId = 'load-' + Date.now();
@@ -510,25 +425,16 @@ window.sendFriendMsg = async () => {
     log.scrollTop = log.scrollHeight;
 
     try {
-        let reply = "";
-        if (typeof SillyTavern.Generate === 'function') {
-            reply = await SillyTavern.Generate(payload, { quiet: true });
-        } else {
-            reply = "⚠️ API Error.";
-        }
-        
+        let reply = typeof SillyTavern.Generate === 'function' ? await SillyTavern.Generate(payload, { quiet: true }) : "⚠️ API Error.";
         document.getElementById(loadId).remove();
-        
         friendChatHistory.push({ role: 'assistant', content: reply });
-        
         log.innerHTML += `<div style="margin-bottom:10px; padding:5px; border-radius:4px;">${reply}</div>`;
-        
     } catch (e) {
         document.getElementById(loadId).innerText = "Error: " + e.message;
     }
-    
     log.scrollTop = log.scrollHeight;
 };
+
 // index.js - Part 4: UI Renderer
 
 // =================================================================
@@ -565,24 +471,28 @@ const buildBaseUI = () => {
 
         <div id="view-normal" style="display: ${uiState.friendMode ? 'none' : 'block'};">
             <div class="dashboard-zone">
-                <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
-                    <span style="color:#aaa;">🔋 Tokens Saved</span>
-                    <span class="dash-val" style="color:#E040FB;" id="disp-saved">0 T</span>
+                <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px; cursor:pointer;" onclick="toggleLorebookView()">
+                    <span style="color:#aaa;">📘 Check Lorebook</span>
+                    <button style="background:#330044; border:1px solid #D500F9; color:#fff; font-size:10px; padding:2px 8px; cursor:pointer;">SCAN NOW</button>
                 </div>
+
                 <div class="dash-row" style="align-items:center;">
-                    <span style="color:#fff;">🧠 Memory</span>
-                    <span class="dash-val" style="color:#00E676; font-size:14px;" id="disp-range">...</span>
+                    <span style="color:#fff;">📚 Active Entries</span>
+                    <span class="dash-val" style="color:#00E676; font-size:14px;" id="disp-lore-stats">Loading...</span>
                 </div>
+                
                 <div class="progress-container">
                     <div class="progress-bar" id="disp-bar" style="width: 0%"></div>
                 </div>
-                <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-top:5px;">
-                    <button class="toggle-numpad-btn" id="btn-toggle-numpad" onclick="toggleNumpad()">🔢 ID Search</button>
-                    <div style="font-size:9px; color:#aaa;">📚 Total: <span style="color:#fff;" id="disp-total">0</span></div>
+                
+                <div style="font-size:9px; color:#aaa; margin-top:5px; text-align:right;">
+                    Total Msg: <span style="color:#fff;" id="disp-total">0</span>
                 </div>
             </div>
+
             <div class="ins-body">
-                <div id="section-numpad"></div>
+                <div id="section-lorebook" style="display:none; margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:10px;"></div>
+                
                 <div id="section-viewer"></div>
                 <div style="font-size:9px; color:#666; margin-bottom:4px; text-transform:uppercase; margin-top:5px;">Recent Messages</div>
                 <div class="msg-list" id="section-list"></div>
@@ -594,9 +504,7 @@ const buildBaseUI = () => {
                 <span style="font-size: 10px; color: #aaa;">MODE: ${uiState.chatMode.toUpperCase()}</span>
                 <button onclick="toggleCharSettings()" style="background:none; border:none; color:#C5A059; cursor:pointer;">⚙️ Setup</button>
             </div>
-            
             <div id="friend-body-content" style="flex:1; overflow-y:auto; position:relative;"></div>
-
             <div style="padding:8px; background:#222; display:flex; gap:5px; border-top:1px solid #00E676;">
                 <input type="text" id="friend-input" style="flex:1; background:#000; border:1px solid #444; color:#fff; padding:5px; font-size:12px;" placeholder="Message..." onkeydown="if(event.key==='Enter') sendFriendMsg()">
                 <button onclick="sendFriendMsg()" style="background:#00E676; border:none; color:#000; font-weight:bold; cursor:pointer; padding:0 10px;">➤</button>
@@ -605,10 +513,41 @@ const buildBaseUI = () => {
     `;
     
     uiState.isPanelBuilt = true;
-    
-    if (uiState.friendMode) {
-        renderFriendBody();
+    if (uiState.friendMode) renderFriendBody();
+};
+
+// ฟังก์ชัน Render Lorebook List
+const renderLorebookSection = () => {
+    const container = document.getElementById('section-lorebook');
+    if (!container) return;
+
+    if (!uiState.showNumpad) { // ใช้ showNumpad เป็น flag เปิดปิด
+        container.style.display = 'none';
+        return;
     }
+    
+    container.style.display = 'block';
+    
+    // ดึงข้อมูล Active ที่สแกนไว้
+    const active = lorebookState.activeEntries || [];
+    
+    if (active.length === 0) {
+        container.innerHTML = `<div style="color:#666; font-size:11px; text-align:center; padding:10px;">No Lorebooks Active</div>`;
+        return;
+    }
+
+    let html = `<div style="font-size:10px; color:#D500F9; margin-bottom:5px;">📖 TRIGGERED ENTRIES (${active.length})</div>`;
+    
+    active.forEach(entry => {
+        html += `
+            <div style="background:#1a1a1a; padding:6px; margin-bottom:4px; border-left:2px solid #00E676; font-size:11px;">
+                <div style="color:#fff; font-weight:bold;">${entry.name}</div>
+                <div style="color:#aaa; font-size:9px;">🔑 Key: <span style="color:#E040FB;">"${entry.trigger}"</span></div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
 };
 
 const renderFriendBody = () => {
@@ -619,100 +558,79 @@ const renderFriendBody = () => {
         let html = `<div style="padding:10px; color:#ddd;">`;
         html += `<div style="font-size:11px; color:#C5A059; margin-bottom:5px;">CHAT MODE</div>`;
         html += `<div style="display:flex; gap:5px; margin-bottom:15px;">`;
-        
         html += `<button onclick="setChatMode('group')" class="mode-btn ${uiState.chatMode==='group'?'active':''}">👥 Group</button>`;
-        
         globalData.characters.forEach(c => {
              html += `<button onclick="setChatMode('route', ${c.id})" class="mode-btn ${uiState.chatMode==='route' && uiState.selectedCharId===c.id ? 'active' : ''}" style="border-color:${c.color}; color:${c.color}">${c.name}</button>`;
         });
         html += `</div>`;
-
         html += `<div style="font-size:11px; color:#C5A059; margin-bottom:5px;">CHARACTERS</div>`;
         globalData.characters.forEach(c => {
-            html += `<div class="char-row">
-                <span style="color:${c.color}">● ${c.name}</span>
-                <span style="font-size:9px; color:#666; cursor:pointer;" onclick="deleteCharacter(${c.id})">❌</span>
-            </div>`;
+            html += `<div class="char-row"><span style="color:${c.color}">● ${c.name}</span><span style="font-size:9px; color:#666; cursor:pointer;" onclick="deleteCharacter(${c.id})">❌</span></div>`;
         });
-
         html += `<div style="margin-top:10px; padding-top:10px; border-top:1px dashed #444;">
             <input id="new-char-name" placeholder="Name" style="width:100%; margin-bottom:5px; background:#111; color:#fff; border:1px solid #333;">
             <input id="new-char-color" type="color" style="width:100%; height:25px; margin-bottom:5px; background:#111; border:none;">
             <textarea id="new-char-desc" placeholder="Personality/Details..." style="width:100%; height:50px; background:#111; color:#fff; border:1px solid #333;"></textarea>
             <button onclick="saveNewCharacter()" style="width:100%; background:#333; color:#fff; border:1px solid #555; cursor:pointer;">+ Add Character</button>
         </div></div>`;
-        
         container.innerHTML = html;
-        
     } else {
         container.innerHTML = `<div id="friend-log" style="padding:10px; font-size:12px; color:#ccc; min-height:100%;">
             <div style="text-align:center; color:#555; margin-top:20px;">
-                <span style="color:#00E676">●</span> System Online<br>
-                Route: ${uiState.chatMode.toUpperCase()}<br>
-                <span style="font-size:9px; color:#444;">${globalData.routes[globalData.currentRouteId]?.plot || "No Plot Data"}</span>
+                <span style="color:#00E676">●</span> System Online<br>Route: ${uiState.chatMode.toUpperCase()}<br><span style="font-size:9px; color:#444;">${globalData.routes[globalData.currentRouteId]?.plot || "No Plot Data"}</span>
             </div>
         </div>`;
     }
 };
+
+// index.js - Part 5: Update Loop & Styles & Init
+
 const updateUI = () => {
     const ins = document.getElementById('chronos-inspector');
-    if (!ins || ins.style.display === 'none') {
-        return;
-    }
+    if (!ins || ins.style.display === 'none') return;
     
-    if (!uiState.isPanelBuilt || ins.innerHTML === "") {
-        buildBaseUI();
-    }
-    
-    if (uiState.friendMode) {
-        return;
-    }
+    if (!uiState.isPanelBuilt || ins.innerHTML === "") buildBaseUI();
+    if (uiState.friendMode) return;
 
-    const stats = calculateStats();
+    // 1. เรียกคำนวณ Lorebook
+    const loreStats = scanLorebooks();
+    const chatStats = calculateStats();
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
-    if (stats.savedTokens !== lastRenderData.saved) {
-        document.getElementById('disp-saved').innerText = `${fmt(stats.savedTokens)} T`;
-        lastRenderData.saved = stats.savedTokens;
-    }
-    if (stats.rangeLabel !== lastRenderData.range) {
-        document.getElementById('disp-range').innerText = stats.rangeLabel;
-        lastRenderData.range = stats.rangeLabel;
-    }
-    if (stats.totalMsgs !== lastRenderData.total) {
-        document.getElementById('disp-total').innerText = fmt(stats.totalMsgs);
-        lastRenderData.total = stats.totalMsgs;
-    }
-    
-    let percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
-    if (Math.abs(percent - lastRenderData.load) > 0.5) {
-        document.getElementById('disp-bar').style.width = `${percent}%`;
-        lastRenderData.load = percent;
+    // 2. อัปเดต UI: จำนวน Lorebook ที่ Active / ทั้งหมด
+    const statsText = `${fmt(loreStats.active.length)} / ${fmt(loreStats.total)}`;
+    const elStats = document.getElementById('disp-lore-stats');
+    if (elStats && elStats.innerText !== statsText) {
+        elStats.innerText = statsText;
+        // ถ้ามี Active ให้สีเขียว ถ้าไม่มีให้สีเทา
+        elStats.style.color = loreStats.active.length > 0 ? '#00E676' : '#666';
     }
 
-    if (stats.totalMsgs !== lastRenderData.msgCount) {
-        renderListSection();
-        lastRenderData.msgCount = stats.totalMsgs;
+    // 3. อัปเดต Progress Bar
+    let percent = loreStats.total > 0 ? (loreStats.active.length / loreStats.total) * 100 : 0;
+    const elBar = document.getElementById('disp-bar');
+    if (elBar) elBar.style.width = `${percent}%`;
+
+    // 4. อัปเดต Total Messages
+    if (chatStats.totalMsgs !== lastRenderData.total) {
+        document.getElementById('disp-total').innerText = fmt(chatStats.totalMsgs);
+        lastRenderData.total = chatStats.totalMsgs;
+        renderListSection(); // รีเฟรชรายการข้อความ
     }
 
-    if (document.getElementById('section-numpad').innerHTML === "" && uiState.showNumpad) {
-        renderNumpadSection();
+    // 5. ถ้าเปิดหน้ารายการ Lorebook ค้างไว้ ให้รีเฟรชด้วย
+    if (uiState.showNumpad) {
+        renderLorebookSection();
     }
 };
 
 const renderListSection = () => {
     const container = document.getElementById('section-list');
-    let chat = [];
-    if (typeof SillyTavern !== 'undefined') {
-        chat = SillyTavern.getContext()?.chat || [];
-    }
-    
+    let chat = SillyTavern.getContext()?.chat || [];
     if (chat.length > 0) {
         container.innerHTML = chat.slice(-5).reverse().map((msg, i) => {
             const idx = chat.length - 1 - i;
-            const isActive = (uiState.viewingId === idx);
-            const activeClass = isActive ? 'msg-active' : ''; 
-            
+            const activeClass = (uiState.viewingId === idx) ? 'msg-active' : ''; 
             return `<div class="msg-item ${activeClass}" onclick="setViewingId(${idx})">
                         <span style="color:#D500F9;">#${idx}</span> ${msg.is_user?'👤':'🤖'} ${(msg.mes||"").substring(0,20).replace(/</g,'&lt;')}...
                     </div>`;
@@ -722,58 +640,14 @@ const renderListSection = () => {
     }
 };
 
-const renderNumpadSection = () => {
-    const container = document.getElementById('section-numpad');
-    const btn = document.getElementById('btn-toggle-numpad');
-    
-    if (btn) {
-        btn.innerText = uiState.showNumpad ? '🔽 Hide' : '🔢 Search';
-    }
-    
-    if (!uiState.showNumpad) {
-        container.innerHTML = "";
-        return;
-    }
-    
-    container.innerHTML = `
-        <div class="numpad-wrapper">
-            <div class="numpad-display" id="numpad-screen" style="color:${uiState.numpadValue==="ID..."?"#666":"#fff"}">${uiState.numpadValue}</div>
-            <div class="numpad-grid">
-                <button class="num-btn" onclick="numpadType(1)">1</button>
-                <button class="num-btn" onclick="numpadType(2)">2</button>
-                <button class="num-btn" onclick="numpadType(3)">3</button>
-                <button class="num-btn del-btn" onclick="numpadDel()">⌫</button>
-                <button class="num-btn" onclick="numpadType(4)">4</button>
-                <button class="num-btn" onclick="numpadType(5)">5</button>
-                <button class="num-btn" onclick="numpadType(6)">6</button>
-                <button class="num-btn go-btn" onclick="numpadGo()">GO</button>
-                <button class="num-btn" onclick="numpadType(7)">7</button>
-                <button class="num-btn" onclick="numpadType(8)">8</button>
-                <button class="num-btn" onclick="numpadType(9)">9</button>
-                <button class="num-btn" onclick="numpadType(0)">0</button>
-            </div>
-        </div>
-    `;
-};
-
-const updateNumpadDisplay = () => {
-    const el = document.getElementById('numpad-screen');
-    if (el) {
-        el.innerText = uiState.numpadValue;
-        el.style.color = uiState.numpadValue === "ID..." ? "#666" : "#fff";
-    }
-};
-
 const renderViewerSection = () => {
     const container = document.getElementById('section-viewer');
     if (uiState.viewingId === null) {
         container.innerHTML = "";
         return;
     }
-    
     let chat = SillyTavern.getContext()?.chat || [];
     const msg = chat[uiState.viewingId];
-    
     if (msg) {
         let text = /<[^>]+>/.test(msg.mes) ? `[System Content:\n${stripHtmlToText(msg.mes)}]` : msg.mes;
         container.innerHTML = `
@@ -783,530 +657,165 @@ const renderViewerSection = () => {
                     <button class="close-btn" onclick="closeViewer()">CLOSE</button>
                 </div>
                 <div class="view-area">${text.replace(/</g, '&lt;')}</div>
-            </div>
-        `;
+            </div>`;
     }
 };
-              // index.js - Part 5: Styles & Init (Fix Close Button & Green Glow)
-
-// =================================================================
-// 6. STYLES & INIT
-// =================================================================
 
 const injectStyles = () => {
     const exist = document.getElementById('chronos-style');
     if (exist) exist.remove();
-
     const style = document.createElement('style');
     style.id = 'chronos-style';
     style.innerHTML = `
-        /* --- ORB (ลูกแก้ว) --- */
         #chronos-orb {
-            position: fixed;
-            top: 150px;
-            right: 20px;
-            width: 38px;
-            height: 38px;
+            position: fixed; top: 150px; right: 20px;
+            width: 38px; height: 38px;
             background: radial-gradient(circle, rgba(20,0,30,0.95) 0%, rgba(0,0,0,1) 100%);
-            border: 2px solid #D500F9;
-            border-radius: 50%;
-            z-index: 2147483648; 
-            cursor: move;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px; 
-            color: #E040FB;
+            border: 2px solid #D500F9; border-radius: 50%;
+            z-index: 2147483648; cursor: move;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; color: #E040FB;
             box-shadow: 0 0 15px rgba(213, 0, 249, 0.6);
             animation: spin-slow 4s linear infinite;
-            
-            /* CRITICAL MOBILE FIXES */
-            touch-action: none !important; 
-            user-select: none;
-            -webkit-user-select: none;
+            touch-action: none !important; user-select: none; -webkit-user-select: none;
             -webkit-tap-highlight-color: transparent;
         }
-        
-        /* แก้ไข: ใส่ !important เพื่อบังคับให้เป็นสีเขียวเสมอเมื่อ Active */
         #chronos-orb.active {
-            border-color: #00E676 !important;
-            color: #00E676 !important;
+            border-color: #00E676 !important; color: #00E676 !important;
             box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676 !important;
             transform: scale(1.1);
         }
-        @keyframes spin-slow {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* --- WINDOW --- */
+        @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #chronos-inspector {
-            position: fixed;
-            top: 80px;
-            right: 70px;
-            width: 320px;
-            background: rgba(10, 10, 12, 0.98);
-            border: 1px solid #D500F9;
-            border-top: 3px solid #D500F9;
-            color: #E1BEE7;
-            font-family: 'Consolas', monospace;
-            font-size: 12px;
-            display: none;
-            z-index: 2147483647; 
-            border-radius: 8px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.9);
-            backdrop-filter: blur(10px);
-            overflow: visible;
-            touch-action: none !important;
+            position: fixed; top: 80px; right: 70px; width: 320px;
+            background: rgba(10, 10, 12, 0.98); border: 1px solid #D500F9; border-top: 3px solid #D500F9;
+            color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 12px;
+            display: none; z-index: 2147483647; border-radius: 8px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.9); backdrop-filter: blur(10px);
+            overflow: visible; touch-action: none !important;
         }
-
         #holo-tab-btn {
-            position: absolute;
-            top: -24px;
-            right: 20px;
-            background: #000;
-            color: #00E676;
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 1px;
-            padding: 4px 15px;
-            border-radius: 4px 4px 0 0;
-            border: 1px solid #00E676;
-            border-bottom: none;
-            box-shadow: 0 -4px 10px rgba(0, 230, 118, 0.2);
-            z-index: 10;
-            cursor: pointer;
-            transition: 0.2s;
+            position: absolute; top: -24px; right: 20px;
+            background: #000; color: #00E676; font-size: 11px; font-weight: 800; letter-spacing: 1px;
+            padding: 4px 15px; border-radius: 4px 4px 0 0; border: 1px solid #00E676; border-bottom: none;
+            box-shadow: 0 -4px 10px rgba(0, 230, 118, 0.2); z-index: 10; cursor: pointer; transition: 0.2s;
         }
-
-        #holo-tab-btn:hover {
-            text-shadow: 0 0 5px #00E676;
-            box-shadow: 0 -5px 15px rgba(0, 230, 118, 0.5);
-        }
-
+        #holo-tab-btn:hover { text-shadow: 0 0 5px #00E676; box-shadow: 0 -5px 15px rgba(0, 230, 118, 0.5); }
         .ins-header {
-            background: linear-gradient(90deg, #4A0072, #2a0040);
-            color: #fff;
-            padding: 15px;
-            font-weight: bold;
-            display: flex;
-            justify-content: space-between;
-            border-bottom: 1px solid #D500F9;
-            cursor: move;
-            touch-action: none !important;
-            user-select: none;
+            background: linear-gradient(90deg, #4A0072, #2a0040); color: #fff; padding: 15px;
+            font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #D500F9;
+            cursor: move; touch-action: none !important; user-select: none;
         }
-
-        .control-zone {
-            display: flex;
-            gap: 15px;
-            padding: 10px;
-            background: #150518;
-            border-bottom: 1px solid #330044;
-            align-items: center;
-        }
-
-        .switch-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .switch-label {
-            font-size: 11px;
-            color: #ccc;
-        }
-
-        .neon-switch {
-            position: relative;
-            display: inline-block;
-            width: 30px;
-            height: 16px;
-        }
-
-        .neon-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-
-        .slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #333;
-            transition: .4s;
-            border-radius: 16px;
-            border: 1px solid #555;
-        }
-
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 10px;
-            width: 10px;
-            left: 2px;
-            bottom: 2px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-
-        input:checked + .slider {
-            background-color: #2a0040;
-            border-color: #00E676;
-        }
-
-        input:checked + .slider:before {
-            transform: translateX(14px);
-            background-color: #00E676;
-            box-shadow: 0 0 5px #00E676;
-        }
-
-        .dashboard-zone {
-            background: #050505;
-            padding: 15px;
-            border-bottom: 1px solid #333;
-        }
-
-        .dash-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 12px;
-            align-items: center;
-        }
-
-        .dash-val {
-            font-weight: bold;
-            font-size: 13px;
-        }
-
-        .progress-container {
-            width: 100%;
-            height: 6px;
-            background: #222;
-            border-radius: 3px;
-            margin-top: 8px;
-            overflow: hidden;
-        }
-
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, #D500F9, #00E676);
-            width: 0%;
-            transition: width 0.4s ease-out;
-        }
-
-        .ins-body {
-            padding: 10px;
-            background: #111;
-            max-height: 400px;
-            overflow-y: auto;
-        }
-
-        .mode-btn {
-            background: #111;
-            border: 1px solid #444;
-            color: #aaa;
-            padding: 2px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 10px;
-        }
-
-        .mode-btn.active {
-            background: #222;
-            border-color: #fff;
-            color: #fff;
-            box-shadow: 0 0 5px rgba(255,255,255,0.2);
-        }
-
-        .char-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 4px;
-            border-bottom: 1px solid #222;
-        }
-
-        .msg-list {
-            max-height: 120px;
-            overflow-y: auto;
-            border: 1px solid #333;
-            margin-bottom: 10px;
-            background: #0a0a0a;
-            border-radius: 4px;
-        }
-
-        .msg-item {
-            padding: 8px;
-            cursor: pointer;
-            border-bottom: 1px solid #222;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            color: #888;
-            transition: transform 0.2s ease, background 0.2s;
-            border-left: 3px solid transparent;
-        }
-
-        .msg-item:hover {
-            background: #330044;
-            color: #fff;
-        }
-
-        .msg-active {
-            background: linear-gradient(90deg, #330044, #1a0520);
-            color: #fff;
-            border-left: 3px solid #00E676;
-            transform: translateX(6px);
-        }
-
-        .toggle-numpad-btn {
-            background: #333;
-            color: #fff;
-            border: 1px solid #555;
-            border-radius: 3px;
-            padding: 2px 8px;
-            font-size: 10px;
-            cursor: pointer;
-        }
-
-        .toggle-numpad-btn:hover {
-            background: #555;
-        }
-
-        .numpad-wrapper {
-            background: #1a1a1a;
-            padding: 8px;
-            border-radius: 4px;
-            margin-bottom: 10px;
-            border: 1px solid #333;
-        }
-
-        .numpad-display {
-            background: #000;
-            padding: 4px;
-            text-align: right;
-            font-family: monospace;
-            border: 1px solid #444;
-            margin-bottom: 5px;
-            height: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            color: #fff;
-        }
-
-        .numpad-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 3px;
-        }
-
-        .num-btn {
-            background: #2a2a2a;
-            color: #ccc;
-            border: 1px solid #444;
-            border-radius: 3px;
-            padding: 6px;
-            font-size: 11px;
-            cursor: pointer;
-        }
-
-        .num-btn:active {
-            background: #D500F9;
-            color: #fff;
-        }
-
-        .del-btn { color: #ff4081; }
-        .go-btn { background: #00E676; color: #000; font-weight: bold; }
-
-        .viewer-container {
-            margin-bottom: 10px;
-            border: 1px solid #D500F9;
-            border-radius: 4px;
-            background: #080808;
-            overflow: hidden;
-        }
-
-        .viewer-header {
-            background: #1a0520;
-            padding: 5px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #333;
-        }
-
-        .close-btn {
-            background: #ff4081;
-            color: #fff;
-            border: none;
-            font-size: 9px;
-            padding: 2px 6px;
-            border-radius: 2px;
-            cursor: pointer;
-        }
-        .view-area {
-            padding: 8px;
-            height: 120px;
-            overflow-y: auto;
-            color: #00E676;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-size: 11px;
-        }
-
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #111; }
-        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #D500F9; }
+        .control-zone { display: flex; gap: 15px; padding: 10px; background: #150518; border-bottom: 1px solid #330044; align-items: center; }
+        .switch-row { display: flex; align-items: center; gap: 8px; }
+        .switch-label { font-size: 11px; color: #ccc; }
+        .neon-switch { position: relative; display: inline-block; width: 30px; height: 16px; }
+        .neon-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 16px; border: 1px solid #555; }
+        .slider:before { position: absolute; content: ""; height: 10px; width: 10px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #2a0040; border-color: #00E676; }
+        input:checked + .slider:before { transform: translateX(14px); background-color: #00E676; box-shadow: 0 0 5px #00E676; }
+        .dashboard-zone { background: #050505; padding: 15px; border-bottom: 1px solid #333; }
+        .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
+        .dash-val { font-weight: bold; font-size: 13px; }
+        .progress-container { width: 100%; height: 6px; background: #222; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+        .progress-bar { height: 100%; background: linear-gradient(90deg, #D500F9, #00E676); width: 0%; transition: width 0.4s ease-out; }
+        .ins-body { padding: 10px; background: #111; max-height: 400px; overflow-y: auto; }
+        .mode-btn { background: #111; border: 1px solid #444; color: #aaa; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; }
+        .mode-btn.active { background: #222; border-color: #fff; color: #fff; box-shadow: 0 0 5px rgba(255,255,255,0.2); }
+        .char-row { display: flex; justify-content: space-between; padding: 4px; border-bottom: 1px solid #222; }
+        .msg-list { max-height: 120px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #0a0a0a; border-radius: 4px; }
+        .msg-item { padding: 8px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; transition: transform 0.2s ease, background 0.2s; border-left: 3px solid transparent; }
+        .msg-item:hover { background: #330044; color: #fff; }
+        .msg-active { background: linear-gradient(90deg, #330044, #1a0520); color: #fff; border-left: 3px solid #00E676; transform: translateX(6px); }
+        .viewer-container { margin-bottom: 10px; border: 1px solid #D500F9; border-radius: 4px; background: #080808; overflow: hidden; }
+        .viewer-header { background: #1a0520; padding: 5px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; }
+        .close-btn { background: #ff4081; color: #fff; border: none; font-size: 9px; padding: 2px 6px; border-radius: 2px; cursor: pointer; }
+        .view-area { padding: 8px; height: 120px; overflow-y: auto; color: #00E676; white-space: pre-wrap; word-wrap: break-word; font-size: 11px; }
+        ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #111; } ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
     `;
     document.head.appendChild(style);
 };
 
-// =================================================================
-// 7. INITIALIZATION & DRAG LOGIC
-// =================================================================
-
 const createUI = () => {
     const oldOrb = document.getElementById('chronos-orb');
     if (oldOrb) oldOrb.remove();
-    
     const oldPanel = document.getElementById('chronos-inspector');
     if (oldPanel) oldPanel.remove();
     
     const orb = document.createElement('div'); 
-    orb.id = 'chronos-orb'; 
-    orb.innerHTML = '🌌';
-    
+    orb.id = 'chronos-orb'; orb.innerHTML = '🌌';
     const ins = document.createElement('div'); 
     ins.id = 'chronos-inspector';
-    
-    document.body.appendChild(orb); 
-    document.body.appendChild(ins);
+    document.body.appendChild(orb); document.body.appendChild(ins);
     
     const togglePanel = () => {
         if (ins.style.display === 'none' || ins.style.display === '') {
-            ins.style.display = 'block';
-            orb.classList.add('active'); 
-            updateUI();
+            ins.style.display = 'block'; orb.classList.add('active'); updateUI();
         } else {
-            ins.style.display = 'none';
-            orb.classList.remove('active');
+            ins.style.display = 'none'; orb.classList.remove('active');
         }
     };
-    
     makeDraggable(orb, 'orb', togglePanel); 
     makeDraggable(ins, 'panel', null); 
 };
 
 const makeDraggable = (elm, type, clickCallback) => {
-    let offsetX = 0;
-    let offsetY = 0;
-    let isDragging = false;
-    let hasMoved = false;
-
-    // --- MOUSE EVENTS (PC) ---
+    let offsetX = 0, offsetY = 0, isDragging = false, hasMoved = false;
     elm.onmousedown = function(e) {
-        // แก้ไข: ถ้ากดโดนปุ่มปิด (ID=btn-close-panel) ให้ปล่อยผ่าน ไม่ต้องเริ่ม Drag
         if (e.target.id === 'btn-close-panel') return;
-        
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        
         e.preventDefault();
-        
         offsetX = e.clientX - elm.getBoundingClientRect().left;
         offsetY = e.clientY - elm.getBoundingClientRect().top;
-        isDragging = true;
-        hasMoved = false;
-
+        isDragging = true; hasMoved = false;
         document.onmousemove = function(e) {
             if (!isDragging) return;
-            
             if (type === 'orb' && !dragConfig.orbUnlocked) return;
             if (type === 'panel' && !dragConfig.panelUnlocked) return;
-
             hasMoved = true;
             elm.style.left = (e.clientX - offsetX) + "px";
             elm.style.top = (e.clientY - offsetY) + "px";
         };
-
         document.onmouseup = function() {
-            isDragging = false;
-            document.onmousemove = null;
-            document.onmouseup = null;
-            
-            if (!hasMoved && clickCallback) {
-                clickCallback();
-            }
+            isDragging = false; document.onmousemove = null; document.onmouseup = null;
+            if (!hasMoved && clickCallback) clickCallback();
         };
     };
-
-    // --- TOUCH EVENTS (MOBILE) ---
     elm.addEventListener('touchstart', function(e) {
-        // แก้ไข: ถ้าแตะโดนปุ่มปิด ให้ปล่อยผ่าน
         if (e.target.id === 'btn-close-panel') return;
-
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-
-        e.stopPropagation(); 
-        e.preventDefault();
-
+        e.stopPropagation(); e.preventDefault();
         const touch = e.touches[0];
         offsetX = touch.clientX - elm.getBoundingClientRect().left;
         offsetY = touch.clientY - elm.getBoundingClientRect().top;
-        isDragging = true;
-        hasMoved = false;
-
+        isDragging = true; hasMoved = false;
     }, { passive: false });
-
     elm.addEventListener('touchmove', function(e) {
         if (!isDragging) return;
-        
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
-        
-        e.preventDefault();
-        e.stopPropagation();
-
+        e.preventDefault(); e.stopPropagation();
         hasMoved = true;
         const touch = e.touches[0];
         elm.style.left = (touch.clientX - offsetX) + "px";
         elm.style.top = (touch.clientY - offsetY) + "px";
-        
     }, { passive: false });
-
     elm.addEventListener('touchend', function(e) {
         isDragging = false;
-        
-        if (!hasMoved && clickCallback) {
-            clickCallback();
-        }
+        if (!hasMoved && clickCallback) clickCallback();
     });
 };
 
-// Start Extension
 (function() {
     injectStyles();
-    
     setTimeout(createUI, 2000); 
-    
     if (typeof SillyTavern !== 'undefined' && SillyTavern.extension_manager) {
         SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
         SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
     }
-    
     setInterval(() => {
         const ins = document.getElementById('chronos-inspector');
-        if (ins && (ins.style.display === 'block' || ins.style.display === 'flex')) {
-            updateUI();
-        }
+        if (ins && (ins.style.display === 'block' || ins.style.display === 'flex')) updateUI();
     }, 2000);
 })();
-
-            
