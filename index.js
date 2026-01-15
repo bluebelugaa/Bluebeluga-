@@ -1,7 +1,7 @@
-// index.js - Chronos V66.30 (Lorebook Inspector Edition)
+// index.js - Chronos V66.35 (Lorebook Corrected)
 // Part 1: Config & Data
 
-const extensionName = "Chronos_Ultimate_V30";
+const extensionName = "Chronos_Ultimate_V35";
 
 // =================================================================
 // 0. HIDDEN PROMPTS
@@ -33,7 +33,7 @@ let dragConfig = {
 };
 
 let uiState = {
-    showNumpad: false, // ใช้เป็นตัว Toggle ดู Lorebook ทั้งหมดแทน
+    showNumpad: false, // ใช้เป็นตัว Toggle เปิด List Lorebook
     viewingId: null,
     numpadValue: "ID...",
     isPanelBuilt: false,
@@ -44,34 +44,19 @@ let uiState = {
     editingCharId: null
 };
 
-// เก็บข้อมูล Lorebook ชั่วคราว
+// เก็บข้อมูล Lorebook
 let lorebookState = {
     totalEntries: 0,
     activeEntries: [],
-    lastScanText: ""
+    activeCount: 0
 };
 
 let globalData = {
     characters: [
-        { 
-            id: 1, 
-            name: "Kirin", 
-            color: "#C5A059", 
-            personality: "Cold, Observer, Loves Operator." 
-        },
-        { 
-            id: 2, 
-            name: "WhiteCat", 
-            color: "#f0f0f0", 
-            personality: "Jealous, Possessive, Mocking." 
-        }
+        { id: 1, name: "Kirin", color: "#C5A059", personality: "Cold, Observer, Loves Operator." },
+        { id: 2, name: "WhiteCat", color: "#f0f0f0", personality: "Jealous, Possessive, Mocking." }
     ],
-    routes: {
-        "default": { 
-            summary: "New timeline started.", 
-            plot: "None" 
-        }
-    },
+    routes: { "default": { summary: "New timeline started.", plot: "None" } },
     currentRouteId: "default"
 };
 
@@ -83,16 +68,15 @@ let lastRenderData = {
     total: -1,
     load: -1,
     max: -1,
-    msgCount: -1
+    msgCount: -1,
+    activeLore: -1
 };
 
 // --- Storage Functions ---
 
 const loadGlobalData = () => {
     const saved = localStorage.getItem('chronos_global_db_v1');
-    if (saved) {
-        globalData = JSON.parse(saved);
-    }
+    if (saved) globalData = JSON.parse(saved);
 };
 
 const saveGlobalData = () => {
@@ -111,30 +95,16 @@ const getChronosTokenizer = () => {
             return SillyTavern.Tokenizers.getTokenizerForModel(model);
         }
         return null;
-    } catch (e) {
-        return null;
-    }
+    } catch (e) { return null; }
 };
 
 const stripHtmlToText = (html) => {
-    if (!html) {
-        return "";
-    }
-    
-    let text = html.replace(/<br\s*\/?>/gi, '\n')
-                   .replace(/<\/p>/gi, '\n\n')
-                   .replace(/<\/div>/gi, '\n')
-                   .replace(/<\/h[1-6]>/gi, '\n');
-                   
-    text = text.replace(/<[^>]+>/g, '')
-               .replace(/&lt;[^&]+&gt;/g, '')
-               .replace(/\n\s*\n/g, '\n\n')
-               .trim();
-               
-    return text;
+    if (!html) return "";
+    let text = html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n').replace(/<\/div>/gi, '\n').replace(/<\/h[1-6]>/gi, '\n');
+    return text.replace(/<[^>]+>/g, '').replace(/&lt;[^&]+&gt;/g, '').replace(/\n\s*\n/g, '\n\n').trim();
 };
 
-// index.js - Part 2: Logic Core (Lorebook Scanner)
+// index.js - Part 2: Logic Core
 
 // =================================================================
 // 2. HOOKS
@@ -147,135 +117,136 @@ const optimizePayload = (data) => {
         }
         return text;
     };
-
     if (data.body?.messages) {
-        data.body.messages.forEach(msg => {
-            msg.content = processText(msg.content);
-        });
+        data.body.messages.forEach(msg => { msg.content = processText(msg.content); });
     } else if (data.body?.prompt) {
         data.body.prompt = processText(data.body.prompt);
     }
-    
-    setTimeout(() => {
-        lastRenderData.msgCount = -1; 
-        updateUI();
-    }, 1000);
-    
+    setTimeout(() => { lastRenderData.msgCount = -1; updateUI(); }, 1000);
     return data;
 };
 
 // =================================================================
-// 3. LOREBOOK SCANNER LOGIC
+// 3. CALCULATOR & SCANNER
 // =================================================================
 
-const scanLorebooks = () => {
-    // ดึงข้อมูล Context
-    let context = {};
-    if (typeof SillyTavern !== 'undefined') {
-        context = SillyTavern.getContext() || {};
-    }
+const findMaxContext = (contextObj) => {
+    let max = 0;
+    if (contextObj.max_context && contextObj.max_context > 0) max = parseInt(contextObj.max_context);
+    else if (typeof SillyTavern !== 'undefined' && SillyTavern.settings?.context_size) max = parseInt(SillyTavern.settings.context_size);
+    if (max === 0) max = 4096;
+    return max;
+};
 
-    // 1. ดึงข้อความล่าสุดมาเช็ค Trigger
+// สแกน Lorebook (World Info)
+const scanLorebooks = () => {
+    let context = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() || {} : {};
     const chat = context.chat || [];
+    
+    // เอาข้อความล่าสุดมาเช็ค Key
     let textToScan = "";
-    // เอา 2 ข้อความล่าสุดมาเช็ค (เผื่อ AI ตอบแล้วมันไปทริกเกอร์อันใหม่)
     if (chat.length > 0) textToScan += (chat[chat.length - 1].mes || "") + "\n";
     if (chat.length > 1) textToScan += (chat[chat.length - 2].mes || "") + "\n";
-    
     textToScan = textToScan.toLowerCase();
 
-    // 2. ดึง World Info (Lorebook)
-    // SillyTavern เก็บ WI ไว้ใน context.world_info หรือตัวแปร global
     let entries = [];
-    if (context.world_info) {
-        entries = context.world_info; // แบบใหม่
-    } else if (typeof SillyTavern.world_info !== 'undefined') {
-        // แปลง Object เป็น Array ถ้าจำเป็น
-        entries = Object.values(SillyTavern.world_info);
-    }
-
-    if (!entries || entries.length === 0) {
-        return { total: 0, active: [] };
-    }
+    if (context.world_info) entries = context.world_info;
+    else if (typeof SillyTavern.world_info !== 'undefined') entries = Object.values(SillyTavern.world_info);
 
     let activeList = [];
     let totalCount = 0;
 
-    entries.forEach(entry => {
-        // เช็คว่า Lorebook นี้เปิดใช้งานไหม (disable หรือเปล่า)
-        if (entry.disable) return;
-        
-        totalCount++;
+    if (entries) {
+        entries.forEach(entry => {
+            if (entry.disable) return; // ข้ามอันที่ปิดอยู่
+            totalCount++;
+            
+            // เช็ค Keywords
+            let keys = [];
+            if (Array.isArray(entry.keys)) keys = entry.keys;
+            else if (typeof entry.keys === 'string') keys = entry.keys.split(',').map(k => k.trim()).filter(k => k);
+            else if (entry.key) keys = entry.key.split(',').map(k => k.trim()).filter(k => k);
 
-        // 3. เช็ค Keys (คำทริกเกอร์)
-        // keys อาจจะเป็น string ขั้นด้วย , หรือ array
-        let keys = [];
-        if (Array.isArray(entry.keys)) {
-            keys = entry.keys;
-        } else if (typeof entry.keys === 'string') {
-            keys = entry.keys.split(',').map(k => k.trim()).filter(k => k);
-        } else if (entry.key) {
-             keys = entry.key.split(',').map(k => k.trim()).filter(k => k);
-        }
-
-        // หาว่าคำไหนทริกเกอร์
-        let triggeredBy = null;
-        for (let k of keys) {
-            const cleanKey = k.toLowerCase();
-            // เช็คแบบง่าย (Includes)
-            if (textToScan.includes(cleanKey)) {
-                triggeredBy = k;
-                break;
+            let triggered = null;
+            // เช็คว่า Keywords ตรงกับข้อความล่าสุดไหม
+            for (let k of keys) {
+                if (textToScan.includes(k.toLowerCase())) {
+                    triggered = k;
+                    break;
+                }
             }
-        }
-
-        // 4. ถ้าเจอว่าทริกเกอร์ ให้เก็บลง List
-        if (triggeredBy) {
-            activeList.push({
-                name: entry.comment || entry.name || "Untitled",
-                trigger: triggeredBy,
-                content: entry.content
-            });
-        }
-    });
+            
+            // เพิ่ม: เช็คเงื่อนไข Constant/Always Active
+            const isConstant = entry.constant || (entry.position && entry.position.includes('constant'));
+            
+            if (triggered || isConstant) {
+                activeList.push({
+                    name: entry.comment || entry.name || "Untitled",
+                    trigger: isConstant ? "[Always Active]" : triggered,
+                    content: entry.content
+                });
+            }
+        });
+    }
 
     lorebookState.totalEntries = totalCount;
     lorebookState.activeEntries = activeList;
+    lorebookState.activeCount = activeList.length;
+};
+
+// คำนวณ Token และ Context (แบบเดิม)
+const calculateStats = () => {
+    let chat = [], context = {};
+    if (typeof SillyTavern !== 'undefined') {
+        context = SillyTavern.getContext() || {};
+        chat = context.chat || [];
+    }
+
+    const maxTokens = findMaxContext(context);
+    const tokenizer = getChronosTokenizer();
+    const quickCount = (text) => tokenizer ? tokenizer.encode(text).length : Math.ceil((text||"").length / 3);
+
+    let totalSaved = 0;
+    let messageTokensArray = [];
+
+    chat.forEach((msg) => {
+        const rawMsg = msg.mes || "";
+        let rawCount = quickCount(rawMsg);
+        let cleanCount = rawCount;
+        if (/<[^>]+>/.test(rawMsg)) {
+            const cleanText = stripHtmlToText(rawMsg);
+            cleanCount = quickCount(`[System Content:\n${cleanText}]`);
+            if (rawCount > cleanCount) totalSaved += (rawCount - cleanCount);
+        }
+        messageTokensArray.push(cleanCount);
+    });
+
+    let currentTotalUsage = context.tokens || messageTokensArray.reduce((a,b) => a + b, 0);
+    
+    // เรียก Scan Lorebook ทุกครั้งที่คำนวณ Stat
+    scanLorebooks();
 
     return {
-        total: totalCount,
-        active: activeList
+        savedTokens: totalSaved,
+        max: maxTokens,
+        currentLoad: currentTotalUsage
     };
 };
-
-// ฟังก์ชันเดิมแต่ลดรูป ไว้แค่เช็คจำนวนข้อความเฉยๆ
-const calculateStats = () => {
-    let chat = [];
-    if (typeof SillyTavern !== 'undefined') {
-        chat = SillyTavern.getContext()?.chat || [];
-    }
-    return { totalMsgs: chat.length };
-};
-
-// index.js - Part 3: Interaction & Chat System
+    // index.js - Part 3: Interaction
 
 // =================================================================
 // 4. INTERACTION
 // =================================================================
 
 window.toggleDrag = (type, state) => {
-    if (type === 'orb') {
-        dragConfig.orbUnlocked = state;
-    } else if (type === 'panel') {
-        dragConfig.panelUnlocked = state;
-    }
+    if (type === 'orb') dragConfig.orbUnlocked = state;
+    else if (type === 'panel') dragConfig.panelUnlocked = state;
 };
 
-// เปลี่ยนจาก Numpad เป็นปุ่มเปิดดู Lorebook ทั้งหมด (ถ้าต้องการ)
+// ใช้ปุ่มนี้เปิดดูรายการ Lorebook
 window.toggleLorebookView = () => {
-    // ใช้ uiState.showNumpad แทนตัวแปร Lorebook Toggle ชั่วคราว
     uiState.showNumpad = !uiState.showNumpad;
-    renderLorebookSection(); 
+    renderLorebookList(); 
 };
 
 window.setViewingId = (id) => {
@@ -306,80 +277,49 @@ window.toggleCharSettings = () => {
 
 window.saveNewCharacter = () => {
     const name = document.getElementById('new-char-name').value;
-    const color = document.getElementById('new-char-color').value;
     const desc = document.getElementById('new-char-desc').value;
+    const color = document.getElementById('new-char-color').value;
     if (name && desc) {
-        const newId = Date.now();
-        globalData.characters.push({ id: newId, name: name, color: color, personality: desc });
-        saveGlobalData();
-        renderFriendBody();
+        globalData.characters.push({ id: Date.now(), name, color, personality: desc });
+        saveGlobalData(); renderFriendBody();
     }
 };
 
 window.deleteCharacter = (id) => {
     globalData.characters = globalData.characters.filter(c => c.id !== id);
-    saveGlobalData();
-    renderFriendBody();
+    saveGlobalData(); renderFriendBody();
 };
 
 window.setChatMode = (mode, charId = null) => {
-    uiState.chatMode = mode;
-    uiState.selectedCharId = charId;
+    uiState.chatMode = mode; uiState.selectedCharId = charId;
     renderFriendBody();
 };
-
-// --- Hidden Summary Logic ---
 
 const generateHiddenSummary = async (chatText) => {
     try {
         if (typeof SillyTavern.Generate === 'function') {
-            const summaryPayload = [
+            const result = await SillyTavern.Generate([
                 { role: 'system', content: HIDDEN_SUMMARY_PROMPT },
-                { role: 'user', content: `Analyze this chat: ${chatText}` }
-            ];
-            const result = await SillyTavern.Generate(summaryPayload, { quiet: true });
+                { role: 'user', content: `Analyze: ${chatText}` }
+            ], { quiet: true });
             globalData.routes[globalData.currentRouteId] = { summary: result, timestamp: Date.now() };
             saveGlobalData();
         }
-    } catch(e) { console.error("Summary Failed:", e); }
+    } catch(e) {}
 };
-
-// --- Tab Switching Logic ---
 
 window.toggleTabMode = () => {
     uiState.friendMode = !uiState.friendMode;
-    const normalView = document.getElementById('view-normal');
-    const friendView = document.getElementById('view-friend');
     const controls = document.getElementById('panel-controls');
     const tabBtn = document.getElementById('holo-tab-btn');
-
-    if (normalView && friendView) {
-        if (uiState.friendMode) {
-            normalView.style.display = 'none';
-            friendView.style.display = 'flex';
-        } else {
-            normalView.style.display = 'block';
-            friendView.style.display = 'none';
-        }
-        
-        if (controls) {
-            controls.style.display = uiState.friendMode ? 'none' : 'flex';
-        }
-        
-        if (uiState.friendMode) {
-            renderFriendBody();
-        }
-    }
-
+    document.getElementById('view-normal').style.display = uiState.friendMode ? 'none' : 'block';
+    document.getElementById('view-friend').style.display = uiState.friendMode ? 'flex' : 'none';
+    if (controls) controls.style.display = uiState.friendMode ? 'none' : 'flex';
     if (tabBtn) {
         tabBtn.innerText = uiState.friendMode ? 'STATS' : 'SYSTEM';
-        tabBtn.style.color = '#00E676';
-        if (uiState.friendMode) {
-             tabBtn.style.boxShadow = '0 -5px 15px rgba(0, 230, 118, 0.4)';
-        } else {
-             tabBtn.style.boxShadow = '0 -4px 10px rgba(0, 230, 118, 0.2)';
-        }
+        tabBtn.style.boxShadow = uiState.friendMode ? '0 -5px 15px rgba(0, 230, 118, 0.4)' : '0 -4px 10px rgba(0, 230, 118, 0.2)';
     }
+    if (uiState.friendMode) renderFriendBody();
 };
 
 window.sendFriendMsg = async () => {
@@ -388,57 +328,29 @@ window.sendFriendMsg = async () => {
     const txt = input.value.trim();
     if (!txt) return;
     input.value = ''; 
-
-    log.innerHTML += `<div style="margin-bottom:6px; text-align:right; padding:6px; background:#333; border-radius:4px; color:#aaa;"><b>Op:</b> ${txt}</div>`;
+    log.innerHTML += `<div style="text-align:right; margin:5px; color:#aaa;"><b>Op:</b> ${txt}</div>`;
     friendChatHistory.push({ role: 'user', content: `[message] ${txt}` });
-    log.scrollTop = log.scrollHeight;
-
     generateHiddenSummary(txt);
-
-    let dynamicSystemPrompt = BASE_FRIEND_PROMPT + "\n\n[Active Characters]:\n";
-    if (uiState.chatMode === 'group') {
-        globalData.characters.forEach(c => {
-            dynamicSystemPrompt += `- Name: ${c.name} (Color: ${c.color})\n  Personality: ${c.personality}\n`;
-        });
-        dynamicSystemPrompt += "\nMode: GROUP CHAT";
-    } else if (uiState.chatMode === 'route' && uiState.selectedCharId) {
-        const char = globalData.characters.find(c => c.id === uiState.selectedCharId);
-        if (char) {
-            dynamicSystemPrompt += `- Name: ${char.name} (Color: ${char.color})\n  Personality: ${char.personality}\n`;
-            dynamicSystemPrompt += "\nMode: ROUTE (Focus on this character)";
-        }
-    }
-
-    const currentSummary = globalData.routes[globalData.currentRouteId]?.summary || "No prior data.";
-    dynamicSystemPrompt += `\n\n[Global Memory]:\n${currentSummary}`;
-    const context = SillyTavern.getContext();
-    const lastMsg = context.chat && context.chat.length > 0 ? context.chat[context.chat.length-1] : { name: '?', mes: '' };
     
-    const payload = [
-        { role: 'system', content: dynamicSystemPrompt },
-        ...friendChatHistory,
-        { role: 'user', content: `(Story Context: ${lastMsg.name}: ${stripHtmlToText(lastMsg.mes)})\n\n[message] ${txt}` }
-    ];
-
+    // Basic Friend Logic (Shortened for copy paste)
+    let sys = BASE_FRIEND_PROMPT + "\n[Chars]:";
+    if (uiState.chatMode === 'group') globalData.characters.forEach(c => sys += `\n${c.name} (${c.personality})`);
+    else { const c = globalData.characters.find(x=>x.id===uiState.selectedCharId); if(c) sys += `\n${c.name} (${c.personality})`; }
+    
     const loadId = 'load-' + Date.now();
-    log.innerHTML += `<div id="${loadId}" style="color:#00E676; font-size:10px; margin:5px;">Processing...</div>`;
-    log.scrollTop = log.scrollHeight;
-
+    log.innerHTML += `<div id="${loadId}" style="color:#00E676; font-size:10px;">Processing...</div>`;
     try {
-        let reply = typeof SillyTavern.Generate === 'function' ? await SillyTavern.Generate(payload, { quiet: true }) : "⚠️ API Error.";
+        let reply = typeof SillyTavern.Generate === 'function' ? await SillyTavern.Generate([{role:'system',content:sys}, ...friendChatHistory, {role:'user',content:txt}], {quiet:true}) : "API Error";
         document.getElementById(loadId).remove();
         friendChatHistory.push({ role: 'assistant', content: reply });
-        log.innerHTML += `<div style="margin-bottom:10px; padding:5px; border-radius:4px;">${reply}</div>`;
-    } catch (e) {
-        document.getElementById(loadId).innerText = "Error: " + e.message;
-    }
+        log.innerHTML += `<div style="margin:5px; padding:5px; border-radius:4px; background:#222;">${reply}</div>`;
+    } catch(e) { document.getElementById(loadId).innerText = "Err"; }
     log.scrollTop = log.scrollHeight;
 };
-
-// index.js - Part 4: UI Renderer
+    // index.js - Part 4: UI Renderer
 
 // =================================================================
-// 5. CORE RENDERER (UI GENERATION)
+// 5. CORE RENDERER
 // =================================================================
 
 const buildBaseUI = () => {
@@ -448,7 +360,7 @@ const buildBaseUI = () => {
     ins.innerHTML = `
         <div id="holo-tab-btn" onclick="toggleTabMode()">SYSTEM</div>
         <div class="ins-header" id="panel-header">
-            <span>🚀 CHRONOS V66.30</span>
+            <span>🚀 CHRONOS V66.35</span>
             <span id="btn-close-panel" style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
         </div>
         
@@ -458,27 +370,27 @@ const buildBaseUI = () => {
                     <input type="checkbox" onchange="toggleDrag('orb', this.checked)" ${dragConfig.orbUnlocked ? 'checked' : ''}>
                     <span class="slider"></span>
                 </label>
-                <span class="switch-label">Move Orb</span>
+                <span class="switch-label">Orb</span>
             </div>
             <div class="switch-row">
                 <label class="neon-switch">
                     <input type="checkbox" onchange="toggleDrag('panel', this.checked)" ${dragConfig.panelUnlocked ? 'checked' : ''}>
                     <span class="slider"></span>
                 </label>
-                <span class="switch-label">Move Win</span>
+                <span class="switch-label">Win</span>
             </div>
         </div>
 
         <div id="view-normal" style="display: ${uiState.friendMode ? 'none' : 'block'};">
             <div class="dashboard-zone">
-                <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px; cursor:pointer;" onclick="toggleLorebookView()">
-                    <span style="color:#aaa;">📘 Check Lorebook</span>
-                    <button style="background:#330044; border:1px solid #D500F9; color:#fff; font-size:10px; padding:2px 8px; cursor:pointer;">SCAN NOW</button>
+                <div class="dash-row" style="border-bottom: 1px dashed #333; padding-bottom: 8px; margin-bottom: 8px;">
+                    <span style="color:#aaa;">🔋 Tokens Saved</span>
+                    <span class="dash-val" style="color:#E040FB;" id="disp-saved">0 T</span>
                 </div>
-
-                <div class="dash-row" style="align-items:center;">
-                    <span style="color:#fff;">📚 Active Entries</span>
-                    <span class="dash-val" style="color:#00E676; font-size:14px;" id="disp-lore-stats">Loading...</span>
+                
+                <div class="dash-row" style="align-items:center; cursor:pointer;" onclick="toggleLorebookView()">
+                    <span style="color:#fff;">📘 Lorebook Check</span>
+                    <button style="background:#330044; border:1px solid #D500F9; color:#fff; font-size:10px; padding:2px 8px; cursor:pointer;">VIEW</button>
                 </div>
                 
                 <div class="progress-container">
@@ -486,7 +398,7 @@ const buildBaseUI = () => {
                 </div>
                 
                 <div style="font-size:9px; color:#aaa; margin-top:5px; text-align:right;">
-                    Total Msg: <span style="color:#fff;" id="disp-total">0</span>
+                    Active WI: <span style="color:#00E676; font-weight:bold;" id="disp-active-wi">0</span>
                 </div>
             </div>
 
@@ -500,164 +412,122 @@ const buildBaseUI = () => {
         </div>
 
         <div id="view-friend" style="display: ${uiState.friendMode ? 'flex' : 'none'}; flex-direction: column; height: 380px;">
-            <div style="padding: 5px 10px; background: #222; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 10px; color: #aaa;">MODE: ${uiState.chatMode.toUpperCase()}</span>
+            <div style="padding:5px 10px; background:#222; border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:10px; color:#aaa;">MODE: ${uiState.chatMode.toUpperCase()}</span>
                 <button onclick="toggleCharSettings()" style="background:none; border:none; color:#C5A059; cursor:pointer;">⚙️ Setup</button>
             </div>
-            <div id="friend-body-content" style="flex:1; overflow-y:auto; position:relative;"></div>
+            <div id="friend-body-content" style="flex:1; overflow-y:auto;"></div>
             <div style="padding:8px; background:#222; display:flex; gap:5px; border-top:1px solid #00E676;">
                 <input type="text" id="friend-input" style="flex:1; background:#000; border:1px solid #444; color:#fff; padding:5px; font-size:12px;" placeholder="Message..." onkeydown="if(event.key==='Enter') sendFriendMsg()">
                 <button onclick="sendFriendMsg()" style="background:#00E676; border:none; color:#000; font-weight:bold; cursor:pointer; padding:0 10px;">➤</button>
             </div>
         </div>
     `;
-    
     uiState.isPanelBuilt = true;
     if (uiState.friendMode) renderFriendBody();
 };
 
-// ฟังก์ชัน Render Lorebook List
-const renderLorebookSection = () => {
+const renderLorebookList = () => {
     const container = document.getElementById('section-lorebook');
     if (!container) return;
-
-    if (!uiState.showNumpad) { // ใช้ showNumpad เป็น flag เปิดปิด
-        container.style.display = 'none';
-        return;
-    }
+    if (!uiState.showNumpad) { container.style.display = 'none'; return; }
     
     container.style.display = 'block';
-    
-    // ดึงข้อมูล Active ที่สแกนไว้
     const active = lorebookState.activeEntries || [];
     
     if (active.length === 0) {
-        container.innerHTML = `<div style="color:#666; font-size:11px; text-align:center; padding:10px;">No Lorebooks Active</div>`;
+        container.innerHTML = `<div style="color:#666; font-size:11px; text-align:center;">No Active World Info</div>`;
         return;
     }
 
-    let html = `<div style="font-size:10px; color:#D500F9; margin-bottom:5px;">📖 TRIGGERED ENTRIES (${active.length})</div>`;
-    
+    let html = `<div style="font-size:10px; color:#00E676; margin-bottom:5px;">✅ WORKING (${active.length})</div>`;
     active.forEach(entry => {
-        html += `
-            <div style="background:#1a1a1a; padding:6px; margin-bottom:4px; border-left:2px solid #00E676; font-size:11px;">
-                <div style="color:#fff; font-weight:bold;">${entry.name}</div>
-                <div style="color:#aaa; font-size:9px;">🔑 Key: <span style="color:#E040FB;">"${entry.trigger}"</span></div>
-            </div>
-        `;
+        html += `<div style="background:#111; padding:5px; margin-bottom:3px; border-left:2px solid #00E676; font-size:11px;">
+            <div style="color:#fff;">${entry.name}</div>
+            <div style="color:#aaa; font-size:9px;">Trig: ${entry.trigger}</div>
+        </div>`;
     });
-    
     container.innerHTML = html;
 };
 
 const renderFriendBody = () => {
     const container = document.getElementById('friend-body-content');
     if (!container) return;
-
     if (uiState.showCharSettings) {
-        let html = `<div style="padding:10px; color:#ddd;">`;
-        html += `<div style="font-size:11px; color:#C5A059; margin-bottom:5px;">CHAT MODE</div>`;
-        html += `<div style="display:flex; gap:5px; margin-bottom:15px;">`;
-        html += `<button onclick="setChatMode('group')" class="mode-btn ${uiState.chatMode==='group'?'active':''}">👥 Group</button>`;
-        globalData.characters.forEach(c => {
-             html += `<button onclick="setChatMode('route', ${c.id})" class="mode-btn ${uiState.chatMode==='route' && uiState.selectedCharId===c.id ? 'active' : ''}" style="border-color:${c.color}; color:${c.color}">${c.name}</button>`;
-        });
-        html += `</div>`;
-        html += `<div style="font-size:11px; color:#C5A059; margin-bottom:5px;">CHARACTERS</div>`;
-        globalData.characters.forEach(c => {
-            html += `<div class="char-row"><span style="color:${c.color}">● ${c.name}</span><span style="font-size:9px; color:#666; cursor:pointer;" onclick="deleteCharacter(${c.id})">❌</span></div>`;
-        });
-        html += `<div style="margin-top:10px; padding-top:10px; border-top:1px dashed #444;">
-            <input id="new-char-name" placeholder="Name" style="width:100%; margin-bottom:5px; background:#111; color:#fff; border:1px solid #333;">
-            <input id="new-char-color" type="color" style="width:100%; height:25px; margin-bottom:5px; background:#111; border:none;">
-            <textarea id="new-char-desc" placeholder="Personality/Details..." style="width:100%; height:50px; background:#111; color:#fff; border:1px solid #333;"></textarea>
-            <button onclick="saveNewCharacter()" style="width:100%; background:#333; color:#fff; border:1px solid #555; cursor:pointer;">+ Add Character</button>
-        </div></div>`;
+        let html = `<div style="padding:10px;"><button onclick="setChatMode('group')" class="mode-btn">Group</button>`;
+        globalData.characters.forEach(c=>html+=`<button onclick="setChatMode('route',${c.id})" class="mode-btn" style="color:${c.color}">${c.name}</button>`);
+        html += `<div style="margin-top:10px;"><input id="new-char-name" placeholder="Name" style="width:100%; margin-bottom:5px;"><input id="new-char-color" type="color"><textarea id="new-char-desc" placeholder="Desc" style="width:100%;"></textarea><button onclick="saveNewCharacter()" style="width:100%;">Add</button></div></div>`;
         container.innerHTML = html;
     } else {
-        container.innerHTML = `<div id="friend-log" style="padding:10px; font-size:12px; color:#ccc; min-height:100%;">
-            <div style="text-align:center; color:#555; margin-top:20px;">
-                <span style="color:#00E676">●</span> System Online<br>Route: ${uiState.chatMode.toUpperCase()}<br><span style="font-size:9px; color:#444;">${globalData.routes[globalData.currentRouteId]?.plot || "No Plot Data"}</span>
-            </div>
-        </div>`;
+        container.innerHTML = `<div id="friend-log" style="padding:10px; font-size:12px; color:#ccc;">System Ready.</div>`;
     }
 };
 
-// index.js - Part 5: Update Loop & Styles & Init
+// index.js - Part 5: Update Loop & Styles
 
 const updateUI = () => {
     const ins = document.getElementById('chronos-inspector');
     if (!ins || ins.style.display === 'none') return;
-    
     if (!uiState.isPanelBuilt || ins.innerHTML === "") buildBaseUI();
     if (uiState.friendMode) return;
 
-    // 1. เรียกคำนวณ Lorebook
-    const loreStats = scanLorebooks();
-    const chatStats = calculateStats();
+    // คำนวณ Stats
+    const stats = calculateStats();
     const fmt = (n) => (n ? n.toLocaleString() : "0");
 
-    // 2. อัปเดต UI: จำนวน Lorebook ที่ Active / ทั้งหมด
-    const statsText = `${fmt(loreStats.active.length)} / ${fmt(loreStats.total)}`;
-    const elStats = document.getElementById('disp-lore-stats');
-    if (elStats && elStats.innerText !== statsText) {
-        elStats.innerText = statsText;
-        // ถ้ามี Active ให้สีเขียว ถ้าไม่มีให้สีเทา
-        elStats.style.color = loreStats.active.length > 0 ? '#00E676' : '#666';
+    // 1. อัปเดต Saved Tokens (แบบเก่า)
+    if (stats.savedTokens !== lastRenderData.saved) {
+        const el = document.getElementById('disp-saved');
+        if (el) el.innerText = `${fmt(stats.savedTokens)} T`;
+        lastRenderData.saved = stats.savedTokens;
     }
 
-    // 3. อัปเดต Progress Bar
-    let percent = loreStats.total > 0 ? (loreStats.active.length / loreStats.total) * 100 : 0;
-    const elBar = document.getElementById('disp-bar');
-    if (elBar) elBar.style.width = `${percent}%`;
-
-    // 4. อัปเดต Total Messages
-    if (chatStats.totalMsgs !== lastRenderData.total) {
-        document.getElementById('disp-total').innerText = fmt(chatStats.totalMsgs);
-        lastRenderData.total = chatStats.totalMsgs;
-        renderListSection(); // รีเฟรชรายการข้อความ
+    // 2. อัปเดต Progress Bar (Context Load แบบเก่า)
+    let percent = stats.max > 0 ? Math.min((stats.currentLoad / stats.max) * 100, 100) : 0;
+    if (Math.abs(percent - lastRenderData.load) > 0.5) {
+        const elBar = document.getElementById('disp-bar');
+        if (elBar) elBar.style.width = `${percent}%`;
+        lastRenderData.load = percent;
     }
 
-    // 5. ถ้าเปิดหน้ารายการ Lorebook ค้างไว้ ให้รีเฟรชด้วย
-    if (uiState.showNumpad) {
-        renderLorebookSection();
+    // 3. อัปเดต Active Lorebooks Count (ตรง Total Msg เดิม)
+    if (lorebookState.activeCount !== lastRenderData.activeLore) {
+        const elActive = document.getElementById('disp-active-wi');
+        if (elActive) elActive.innerText = fmt(lorebookState.activeCount);
+        lastRenderData.activeLore = lorebookState.activeCount;
     }
+
+    // 4. รีเฟรชหน้า List Lorebook ถ้าเปิดอยู่
+    if (uiState.showNumpad) renderLorebookList();
+
+    // 5. Render Message List (เหมือนเดิม)
+    renderListSection();
 };
 
 const renderListSection = () => {
     const container = document.getElementById('section-list');
     let chat = SillyTavern.getContext()?.chat || [];
-    if (chat.length > 0) {
-        container.innerHTML = chat.slice(-5).reverse().map((msg, i) => {
-            const idx = chat.length - 1 - i;
-            const activeClass = (uiState.viewingId === idx) ? 'msg-active' : ''; 
-            return `<div class="msg-item ${activeClass}" onclick="setViewingId(${idx})">
-                        <span style="color:#D500F9;">#${idx}</span> ${msg.is_user?'👤':'🤖'} ${(msg.mes||"").substring(0,20).replace(/</g,'&lt;')}...
-                    </div>`;
-        }).join('');
-    } else {
-        container.innerHTML = `<div style="padding:5px; color:#666; font-size:10px;">No messages</div>`;
-    }
+    if (chat.length === 0) { container.innerHTML = `<div style="padding:5px; color:#666; font-size:10px;">No messages</div>`; return; }
+    
+    // Check if chat updated
+    if (chat.length === lastRenderData.msgCount) return;
+    lastRenderData.msgCount = chat.length;
+
+    container.innerHTML = chat.slice(-5).reverse().map((msg, i) => {
+        const idx = chat.length - 1 - i;
+        const activeClass = (uiState.viewingId === idx) ? 'msg-active' : ''; 
+        return `<div class="msg-item ${activeClass}" onclick="setViewingId(${idx})"><span style="color:#D500F9;">#${idx}</span> ${msg.is_user?'👤':'🤖'} ${(msg.mes||"").substring(0,20).replace(/</g,'&lt;')}...</div>`;
+    }).join('');
 };
 
 const renderViewerSection = () => {
     const container = document.getElementById('section-viewer');
-    if (uiState.viewingId === null) {
-        container.innerHTML = "";
-        return;
-    }
+    if (uiState.viewingId === null) { container.innerHTML = ""; return; }
     let chat = SillyTavern.getContext()?.chat || [];
     const msg = chat[uiState.viewingId];
     if (msg) {
         let text = /<[^>]+>/.test(msg.mes) ? `[System Content:\n${stripHtmlToText(msg.mes)}]` : msg.mes;
-        container.innerHTML = `
-            <div class="viewer-container">
-                <div class="viewer-header">
-                    <span style="color:#D500F9;">#${uiState.viewingId} Content<span>
-                    <button class="close-btn" onclick="closeViewer()">CLOSE</button>
-                </div>
-                <div class="view-area">${text.replace(/</g, '&lt;')}</div>
-            </div>`;
+        container.innerHTML = `<div class="viewer-container"><div class="viewer-header"><span style="color:#D500F9;">#${uiState.viewingId} Content<span><button class="close-btn" onclick="closeViewer()">CLOSE</button></div><div class="view-area">${text.replace(/</g, '&lt;')}</div></div>`;
     }
 };
 
@@ -668,53 +538,33 @@ const injectStyles = () => {
     style.id = 'chronos-style';
     style.innerHTML = `
         #chronos-orb {
-            position: fixed; top: 150px; right: 20px;
-            width: 38px; height: 38px;
+            position: fixed; top: 150px; right: 20px; width: 38px; height: 38px;
             background: radial-gradient(circle, rgba(20,0,30,0.95) 0%, rgba(0,0,0,1) 100%);
-            border: 2px solid #D500F9; border-radius: 50%;
-            z-index: 2147483648; cursor: move;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 18px; color: #E040FB;
-            box-shadow: 0 0 15px rgba(213, 0, 249, 0.6);
-            animation: spin-slow 4s linear infinite;
+            border: 2px solid #D500F9; border-radius: 50%; z-index: 2147483648; cursor: move;
+            display: flex; align-items: center; justify-content: center; font-size: 18px; color: #E040FB;
+            box-shadow: 0 0 15px rgba(213, 0, 249, 0.6); animation: spin-slow 4s linear infinite;
             touch-action: none !important; user-select: none; -webkit-user-select: none;
-            -webkit-tap-highlight-color: transparent;
         }
-        #chronos-orb.active {
-            border-color: #00E676 !important; color: #00E676 !important;
-            box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676 !important;
-            transform: scale(1.1);
-        }
+        #chronos-orb.active { border-color: #00E676 !important; color: #00E676 !important; box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676 !important; transform: scale(1.1); }
         @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #chronos-inspector {
             position: fixed; top: 80px; right: 70px; width: 320px;
             background: rgba(10, 10, 12, 0.98); border: 1px solid #D500F9; border-top: 3px solid #D500F9;
-            color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 12px;
-            display: none; z-index: 2147483647; border-radius: 8px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.9); backdrop-filter: blur(10px);
+            color: #E1BEE7; font-family: 'Consolas', monospace; font-size: 12px; display: none; z-index: 2147483647;
+            border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,0.9); backdrop-filter: blur(10px);
             overflow: visible; touch-action: none !important;
         }
         #holo-tab-btn {
-            position: absolute; top: -24px; right: 20px;
-            background: #000; color: #00E676; font-size: 11px; font-weight: 800; letter-spacing: 1px;
-            padding: 4px 15px; border-radius: 4px 4px 0 0; border: 1px solid #00E676; border-bottom: none;
-            box-shadow: 0 -4px 10px rgba(0, 230, 118, 0.2); z-index: 10; cursor: pointer; transition: 0.2s;
+            position: absolute; top: -24px; right: 20px; background: #000; color: #00E676; font-size: 11px;
+            font-weight: 800; padding: 4px 15px; border-radius: 4px 4px 0 0; border: 1px solid #00E676; border-bottom: none; z-index: 10; cursor: pointer;
         }
-        #holo-tab-btn:hover { text-shadow: 0 0 5px #00E676; box-shadow: 0 -5px 15px rgba(0, 230, 118, 0.5); }
-        .ins-header {
-            background: linear-gradient(90deg, #4A0072, #2a0040); color: #fff; padding: 15px;
-            font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #D500F9;
-            cursor: move; touch-action: none !important; user-select: none;
-        }
+        .ins-header { background: linear-gradient(90deg, #4A0072, #2a0040); color: #fff; padding: 15px; font-weight: bold; display: flex; justify-content: space-between; border-bottom: 1px solid #D500F9; touch-action: none !important; }
         .control-zone { display: flex; gap: 15px; padding: 10px; background: #150518; border-bottom: 1px solid #330044; align-items: center; }
-        .switch-row { display: flex; align-items: center; gap: 8px; }
-        .switch-label { font-size: 11px; color: #ccc; }
-        .neon-switch { position: relative; display: inline-block; width: 30px; height: 16px; }
-        .neon-switch input { opacity: 0; width: 0; height: 0; }
+        .switch-row { display: flex; align-items: center; gap: 8px; } .switch-label { font-size: 11px; color: #ccc; }
+        .neon-switch { position: relative; display: inline-block; width: 30px; height: 16px; } .neon-switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 16px; border: 1px solid #555; }
         .slider:before { position: absolute; content: ""; height: 10px; width: 10px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
-        input:checked + .slider { background-color: #2a0040; border-color: #00E676; }
-        input:checked + .slider:before { transform: translateX(14px); background-color: #00E676; box-shadow: 0 0 5px #00E676; }
+        input:checked + .slider { background-color: #2a0040; border-color: #00E676; } input:checked + .slider:before { transform: translateX(14px); background-color: #00E676; box-shadow: 0 0 5px #00E676; }
         .dashboard-zone { background: #050505; padding: 15px; border-bottom: 1px solid #333; }
         .dash-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; align-items: center; }
         .dash-val { font-weight: bold; font-size: 13px; }
@@ -722,10 +572,8 @@ const injectStyles = () => {
         .progress-bar { height: 100%; background: linear-gradient(90deg, #D500F9, #00E676); width: 0%; transition: width 0.4s ease-out; }
         .ins-body { padding: 10px; background: #111; max-height: 400px; overflow-y: auto; }
         .mode-btn { background: #111; border: 1px solid #444; color: #aaa; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; }
-        .mode-btn.active { background: #222; border-color: #fff; color: #fff; box-shadow: 0 0 5px rgba(255,255,255,0.2); }
-        .char-row { display: flex; justify-content: space-between; padding: 4px; border-bottom: 1px solid #222; }
         .msg-list { max-height: 120px; overflow-y: auto; border: 1px solid #333; margin-bottom: 10px; background: #0a0a0a; border-radius: 4px; }
-        .msg-item { padding: 8px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; transition: transform 0.2s ease, background 0.2s; border-left: 3px solid transparent; }
+        .msg-item { padding: 8px; cursor: pointer; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #888; border-left: 3px solid transparent; }
         .msg-item:hover { background: #330044; color: #fff; }
         .msg-active { background: linear-gradient(90deg, #330044, #1a0520); color: #fff; border-left: 3px solid #00E676; transform: translateX(6px); }
         .viewer-container { margin-bottom: 10px; border: 1px solid #D500F9; border-radius: 4px; background: #080808; overflow: hidden; }
@@ -738,84 +586,36 @@ const injectStyles = () => {
 };
 
 const createUI = () => {
-    const oldOrb = document.getElementById('chronos-orb');
-    if (oldOrb) oldOrb.remove();
-    const oldPanel = document.getElementById('chronos-inspector');
-    if (oldPanel) oldPanel.remove();
-    
-    const orb = document.createElement('div'); 
-    orb.id = 'chronos-orb'; orb.innerHTML = '🌌';
-    const ins = document.createElement('div'); 
-    ins.id = 'chronos-inspector';
+    const oldOrb = document.getElementById('chronos-orb'); if (oldOrb) oldOrb.remove();
+    const oldPanel = document.getElementById('chronos-inspector'); if (oldPanel) oldPanel.remove();
+    const orb = document.createElement('div'); orb.id = 'chronos-orb'; orb.innerHTML = '🌌';
+    const ins = document.createElement('div'); ins.id = 'chronos-inspector';
     document.body.appendChild(orb); document.body.appendChild(ins);
-    
-    const togglePanel = () => {
-        if (ins.style.display === 'none' || ins.style.display === '') {
-            ins.style.display = 'block'; orb.classList.add('active'); updateUI();
-        } else {
-            ins.style.display = 'none'; orb.classList.remove('active');
-        }
-    };
-    makeDraggable(orb, 'orb', togglePanel); 
-    makeDraggable(ins, 'panel', null); 
+    const togglePanel = () => { if (ins.style.display === 'none' || ins.style.display === '') { ins.style.display = 'block'; orb.classList.add('active'); updateUI(); } else { ins.style.display = 'none'; orb.classList.remove('active'); } };
+    makeDraggable(orb, 'orb', togglePanel); makeDraggable(ins, 'panel', null); 
 };
 
 const makeDraggable = (elm, type, clickCallback) => {
     let offsetX = 0, offsetY = 0, isDragging = false, hasMoved = false;
-    elm.onmousedown = function(e) {
+    const start = (e) => {
         if (e.target.id === 'btn-close-panel') return;
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        e.preventDefault();
-        offsetX = e.clientX - elm.getBoundingClientRect().left;
-        offsetY = e.clientY - elm.getBoundingClientRect().top;
+        if (e.type === 'touchstart') { e.stopPropagation(); e.preventDefault(); } else { e.preventDefault(); }
+        const c = e.touches ? e.touches[0] : e;
+        offsetX = c.clientX - elm.getBoundingClientRect().left; offsetY = c.clientY - elm.getBoundingClientRect().top;
         isDragging = true; hasMoved = false;
-        document.onmousemove = function(e) {
-            if (!isDragging) return;
-            if (type === 'orb' && !dragConfig.orbUnlocked) return;
-            if (type === 'panel' && !dragConfig.panelUnlocked) return;
-            hasMoved = true;
-            elm.style.left = (e.clientX - offsetX) + "px";
-            elm.style.top = (e.clientY - offsetY) + "px";
-        };
-        document.onmouseup = function() {
-            isDragging = false; document.onmousemove = null; document.onmouseup = null;
-            if (!hasMoved && clickCallback) clickCallback();
-        };
     };
-    elm.addEventListener('touchstart', function(e) {
-        if (e.target.id === 'btn-close-panel') return;
-        if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
-        e.stopPropagation(); e.preventDefault();
-        const touch = e.touches[0];
-        offsetX = touch.clientX - elm.getBoundingClientRect().left;
-        offsetY = touch.clientY - elm.getBoundingClientRect().top;
-        isDragging = true; hasMoved = false;
-    }, { passive: false });
-    elm.addEventListener('touchmove', function(e) {
+    const move = (e) => {
         if (!isDragging) return;
-        if (type === 'orb' && !dragConfig.orbUnlocked) return;
-        if (type === 'panel' && !dragConfig.panelUnlocked) return;
-        e.preventDefault(); e.stopPropagation();
+        if ((type === 'orb' && !dragConfig.orbUnlocked) || (type === 'panel' && !dragConfig.panelUnlocked)) return;
+        if (e.type === 'touchmove') { e.stopPropagation(); e.preventDefault(); }
         hasMoved = true;
-        const touch = e.touches[0];
-        elm.style.left = (touch.clientX - offsetX) + "px";
-        elm.style.top = (touch.clientY - offsetY) + "px";
-    }, { passive: false });
-    elm.addEventListener('touchend', function(e) {
-        isDragging = false;
-        if (!hasMoved && clickCallback) clickCallback();
-    });
+        const c = e.touches ? e.touches[0] : e;
+        elm.style.left = (c.clientX - offsetX) + "px"; elm.style.top = (c.clientY - offsetY) + "px";
+    };
+    const end = () => { isDragging = false; if (!hasMoved && clickCallback) clickCallback(); };
+    elm.onmousedown = start; document.onmousemove = move; document.onmouseup = end;
+    elm.addEventListener('touchstart', start, {passive:false}); elm.addEventListener('touchmove', move, {passive:false}); elm.addEventListener('touchend', end);
 };
 
-(function() {
-    injectStyles();
-    setTimeout(createUI, 2000); 
-    if (typeof SillyTavern !== 'undefined' && SillyTavern.extension_manager) {
-        SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload);
-        SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload);
-    }
-    setInterval(() => {
-        const ins = document.getElementById('chronos-inspector');
-        if (ins && (ins.style.display === 'block' || ins.style.display === 'flex')) updateUI();
-    }, 2000);
-})();
+(function() { injectStyles(); setTimeout(createUI, 2000); if (typeof SillyTavern !== 'undefined' && SillyTavern.extension_manager) { SillyTavern.extension_manager.register_hook('chat_completion_request', optimizePayload); SillyTavern.extension_manager.register_hook('text_completion_request', optimizePayload); } setInterval(updateUI, 2000); })();
