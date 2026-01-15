@@ -1,4 +1,4 @@
-// index.js - Chronos V66.30 (Touch Fix Re-Logic)
+// index.js - Chronos V66.30 (Touch Fix + Close Button Fix)
 // Part 1: Config & Data
 
 const extensionName = "Chronos_Ultimate_V30";
@@ -27,7 +27,6 @@ You are roleplaying as the specific characters defined by the user.
 // 1. STATE & STORAGE MANAGEMENT
 // =================================================================
 
-// แก้ไข: ตั้งเป็น False (ล็อก) เพื่อให้เปิดมาขยับไม่ได้ ต้องติ๊กก่อนถึงจะขยับ
 let dragConfig = {
     orbUnlocked: false, 
     panelUnlocked: false 
@@ -269,18 +268,16 @@ const calculateStats = () => {
         currentLoad: currentTotalUsage
     };
 };
-// index.js - Part 3: Interaction & Chat System
+    // index.js - Part 3: Interaction & Chat System
 
 // =================================================================
 // 4. INTERACTION
 // =================================================================
 
-// ฟังก์ชัน Toggle Drag
 window.toggleDrag = (type, state) => {
     if (type === 'orb') {
         dragConfig.orbUnlocked = state;
-        const orb = document.getElementById('chronos-orb');
-        if(orb) orb.style.borderColor = state ? '#00E676' : '#D500F9';
+        // เอาการเปลี่ยนสีตรงนี้ออก เพื่อให้ CSS จัดการเอง
     } else if (type === 'panel') {
         dragConfig.panelUnlocked = state;
     }
@@ -532,7 +529,7 @@ window.sendFriendMsg = async () => {
     
     log.scrollTop = log.scrollHeight;
 };
-        // index.js - Part 4: UI Renderer
+// index.js - Part 4: UI Renderer
 
 // =================================================================
 // 5. CORE RENDERER (UI GENERATION)
@@ -546,7 +543,7 @@ const buildBaseUI = () => {
         <div id="holo-tab-btn" onclick="toggleTabMode()">SYSTEM</div>
         <div class="ins-header" id="panel-header">
             <span>🚀 CHRONOS V66.30</span>
-            <span style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
+            <span id="btn-close-panel" style="cursor:pointer; color:#ff4081;" onclick="closePanel()">✖</span>
         </div>
         
         <div class="control-zone" id="panel-controls">
@@ -790,7 +787,7 @@ const renderViewerSection = () => {
         `;
     }
 };
-// index.js - Part 5: Styles & Init (Fixed Logic for Click vs Drag)
+              // index.js - Part 5: Styles & Init (Fix Close Button & Green Glow)
 
 // =================================================================
 // 6. STYLES & INIT
@@ -808,7 +805,6 @@ const injectStyles = () => {
             position: fixed;
             top: 150px;
             right: 20px;
-            /* แก้ไข: ลดขนาดเหลือ 38px */
             width: 38px;
             height: 38px;
             background: radial-gradient(circle, rgba(20,0,30,0.95) 0%, rgba(0,0,0,1) 100%);
@@ -831,10 +827,11 @@ const injectStyles = () => {
             -webkit-tap-highlight-color: transparent;
         }
         
+        /* แก้ไข: ใส่ !important เพื่อบังคับให้เป็นสีเขียวเสมอเมื่อ Active */
         #chronos-orb.active {
-            border-color: #00E676;
-            color: #00E676;
-            box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676;
+            border-color: #00E676 !important;
+            color: #00E676 !important;
+            box-shadow: 0 0 25px #00E676, inset 0 0 10px #00E676 !important;
             transform: scale(1.1);
         }
         @keyframes spin-slow {
@@ -1193,7 +1190,6 @@ const createUI = () => {
     document.body.appendChild(orb); 
     document.body.appendChild(ins);
     
-    // ฟังก์ชันเปิด/ปิดหน้าต่าง
     const togglePanel = () => {
         if (ins.style.display === 'none' || ins.style.display === '') {
             ins.style.display = 'block';
@@ -1205,19 +1201,21 @@ const createUI = () => {
         }
     };
     
-    // ติดตั้งระบบ Drag ที่รองรับการคลิกด้วย
     makeDraggable(orb, 'orb', togglePanel); 
-    makeDraggable(ins, 'panel', null); // หน้าต่างไม่ต้องมีคลิก
+    makeDraggable(ins, 'panel', null); 
 };
 
 const makeDraggable = (elm, type, clickCallback) => {
     let offsetX = 0;
     let offsetY = 0;
     let isDragging = false;
-    let hasMoved = false; // ตัวแปรสำคัญ: เช็คว่าขยับจริงไหม
+    let hasMoved = false;
 
     // --- MOUSE EVENTS (PC) ---
     elm.onmousedown = function(e) {
+        // แก้ไข: ถ้ากดโดนปุ่มปิด (ID=btn-close-panel) ให้ปล่อยผ่าน ไม่ต้องเริ่ม Drag
+        if (e.target.id === 'btn-close-panel') return;
+        
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
         
         e.preventDefault();
@@ -1230,7 +1228,6 @@ const makeDraggable = (elm, type, clickCallback) => {
         document.onmousemove = function(e) {
             if (!isDragging) return;
             
-            // เช็ค Config: ถ้าไม่ได้เปิดสวิตช์ ห้ามขยับ
             if (type === 'orb' && !dragConfig.orbUnlocked) return;
             if (type === 'panel' && !dragConfig.panelUnlocked) return;
 
@@ -1244,7 +1241,6 @@ const makeDraggable = (elm, type, clickCallback) => {
             document.onmousemove = null;
             document.onmouseup = null;
             
-            // ถ้าปล่อยเมาส์โดยที่ไม่ได้ขยับเลย = คลิก
             if (!hasMoved && clickCallback) {
                 clickCallback();
             }
@@ -1253,9 +1249,11 @@ const makeDraggable = (elm, type, clickCallback) => {
 
     // --- TOUCH EVENTS (MOBILE) ---
     elm.addEventListener('touchstart', function(e) {
+        // แก้ไข: ถ้าแตะโดนปุ่มปิด ให้ปล่อยผ่าน
+        if (e.target.id === 'btn-close-panel') return;
+
         if (type === 'panel' && !e.target.classList.contains('ins-header') && !e.target.parentElement.classList.contains('ins-header')) return;
 
-        // กัน Scroll และกัน event อื่นแทรก
         e.stopPropagation(); 
         e.preventDefault();
 
@@ -1270,7 +1268,6 @@ const makeDraggable = (elm, type, clickCallback) => {
     elm.addEventListener('touchmove', function(e) {
         if (!isDragging) return;
         
-        // เช็ค Config: ถ้าล็อกอยู่ ห้ามขยับ
         if (type === 'orb' && !dragConfig.orbUnlocked) return;
         if (type === 'panel' && !dragConfig.panelUnlocked) return;
         
@@ -1287,7 +1284,6 @@ const makeDraggable = (elm, type, clickCallback) => {
     elm.addEventListener('touchend', function(e) {
         isDragging = false;
         
-        // ถ้าปล่อยนิ้วโดยที่ไม่ได้ขยับเลย = คลิก
         if (!hasMoved && clickCallback) {
             clickCallback();
         }
@@ -1312,3 +1308,5 @@ const makeDraggable = (elm, type, clickCallback) => {
         }
     }, 2000);
 })();
+
+            
