@@ -1,74 +1,97 @@
+import { eventSource, event_types } from '../../../../script.js';
+
 (function() {
-    // ฟังก์ชันสร้าง UI เมื่อ Extension โหลด
-    async function initExtension() {
-        const container = document.createElement('div');
-        container.id = 'sweet-dots-container';
-        container.innerHTML = `
-            <div class="status-dot dot-1" title="ข้อมูลโลก"></div>
-            <div class="status-dot dot-2" title="สภาพตัวละคร"></div>
-            <div class="status-dot dot-3" title="บันทึกอื่นๆ"></div>
-        `;
-        
-        // นำไปวางในแถบเครื่องมือของ Silly Tavern
-        document.body.appendChild(container);
+    // --- 1. ส่วนคำสั่งลับสำหรับ AI ---
+    const SYSTEM_INSTRUCTION = `
+[SYSTEM NOTE: ทุกครั้งที่ตอบบทสนทนา คุณต้องสรุปข้อมูลสถานะปัจจุบันไว้ที่ท้ายข้อความเสมอ โดยใช้รูปแบบปิดท้ายดังนี้ (ห้ามพิมพ์อย่างอื่นนอกเหนือจากโครงสร้างนี้ในวงเล็บ):
+[RP_DATA: world{วัน เดือน ปี|เวลา|สถานที่|สภาพอากาศ|อุณหภูมิ|ฤดูกาล} body{สภาพร่างกาย|เสื้อผ้า|อาการบาดเจ็บ} plan{ภารกิจหลัก|ตารางเวลา/แผนการ|หมายเหตุ}]
+ให้ข้อมูลสอดคล้องกับเนื้อหาโรลเพลย์ล่าสุดเสมอ]`;
 
-        // สร้าง Modal พื้นฐานไว้ใน Body
-        const modalHtml = `
-            <div id="sweet-modal-overlay" class="sweet-overlay">
-                <div class="sweet-modal-box">
-                    <div class="sweet-modal-header">
-                        <span id="sweet-modal-title">ข้อมูล</span>
-                        <span id="sweet-modal-close">✖</span>
-                    </div>
-                    <div id="sweet-modal-content"></div>
-                </div>
-            </div>
-        `;
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
+    // Hook เพื่อแอบใส่คำสั่งไปใน Prompt ก่อนส่งหา AI
+    eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, (payload) => {
+        // แทรกคำสั่งเข้าไปเป็นข้อความล่าสุดของระบบ
+        payload.prompt.push({
+            role: 'system',
+            content: SYSTEM_INSTRUCTION
+        });
+    });
 
-        // จัดการเหตุการณ์การคลิก
-        const overlay = document.getElementById('sweet-modal-overlay');
-        const title = document.getElementById('sweet-modal-title');
-        const content = document.getElementById('sweet-modal-content');
-        const closeBtn = document.getElementById('sweet-modal-close');
-
-        const showModal = (type) => {
-            overlay.style.display = 'flex';
-            if (type === 1) {
-                title.innerText = "🌍 บันทึกการเดินทาง";
-                content.innerHTML = `
-                    <p><b>วัน/เดือน/ปี:</b> 11 กุมภาพันธ์ 2026</p>
-                    <p><b>เวลา:</b> 02:50 น.</p>
-                    <p><b>สถานที่:</b> คาเฟ่กระต่าย</p>
-                    <p><b>สภาพอากาศ:</b> ท้องฟ้าแจ่มใส</p>
-                    <p><b>อุณหภูมิ:</b> 25°C</p>
-                    <p><b>ฤดูกาล:</b> ฤดูใบไม้ผลิ</p>
-                `;
-            } else if (type === 2) {
-                title.innerText = "🧸 สภาพร่างกาย";
-                content.innerHTML = `
-                    <p><b>สภาพตัวละคร:</b> สดชื่น อารมณ์ดี</p>
-                    <p><b>การแต่งกาย:</b> ชุดผ้าฝ้ายสีครีม</p>
-                    <p><b>อาการบาดเจ็บ:</b> ไม่มี (แข็งแรงดีมาก)</p>
-                    <p><b>ความหิว:</b> อิ่มหนำสำราญ (เพิ่งกินสเต็กเนื้อไป)</p>
-                `;
-            } else if (type === 3) {
-                title.innerText = "✨ บันทึกเตือนความจำ";
-                content.innerHTML = `
-                    <p><b>ภารกิจหลัก:</b> พาเจ้าตัวเล็กไปตรวจสุขภาพ</p>
-                    <p><b>ของที่ต้องซื้อ:</b> หญ้าอัลฟัลฟ่า, สตรอว์เบอร์รี่สด</p>
-                    <p><b>หมายเหตุ:</b> ระวังอย่ากินกุ้งเด็ดขาด!</p>
-                `;
-            }
-        };
-
-        document.querySelector('.dot-1').onclick = () => showModal(1);
-        document.querySelector('.dot-2').onclick = () => showModal(2);
-        document.querySelector('.dot-3').onclick = () => showModal(3);
-        
-        closeBtn.onclick = () => overlay.style.display = 'none';
-        overlay.onclick = (e) => { if(e.target === overlay) overlay.style.display = 'none'; };
+    // --- 2. ส่วนการแสดงผล UI ---
+    function extractRPData(text) {
+        const regex = /\[RP_DATA:\s*world\{(.*?)\}\s*body\{(.*?)\}\s*plan\{(.*?)\}\s*\]/s;
+        const match = text.match(regex);
+        if (match) {
+            return {
+                world: match[1].split('|'),
+                body: match[2].split('|'),
+                plan: match[3].split('|')
+            };
+        }
+        return null;
     }
 
-    initExtension();
+    function injectDots(messageElement) {
+        // หาตำแหน่งวันที่ (ที่อยู่บนขวาของข้อความ)
+        const mesHeader = messageElement.querySelector('.mes_header');
+        const dateElement = messageElement.querySelector('.mes_date');
+        
+        if (!mesHeader || messageElement.querySelector('.sweet-dots-wrapper')) return;
+
+        const rawText = messageElement.querySelector('.mes_text').innerText;
+        const data = extractRPData(rawText);
+
+        if (!data) return;
+
+        // ลบข้อความ Tag ออกจากหน้าแชทไม่ให้รกตา
+        const textContent = messageElement.querySelector('.mes_text');
+        textContent.innerHTML = textContent.innerHTML.replace(/\[RP_DATA:.*?\]/sg, '');
+
+        // สร้างปุ่มวงกลม
+        const wrapper = document.createElement('div');
+        wrapper.className = 'sweet-dots-wrapper';
+        wrapper.innerHTML = `
+            <div class="s-dot d-world" title="World Info"></div>
+            <div class="s-dot d-body" title="Character Status"></div>
+            <div class="s-dot d-plan" title="Missions/Plans"></div>
+        `;
+
+        // นำไปวางแทนที่หรือข้างๆ วันที่
+        if (dateElement) dateElement.style.display = 'none';
+        mesHeader.appendChild(wrapper);
+
+        // คลิกแล้วเด้ง Modal
+        wrapper.querySelector('.d-world').onclick = () => showPop('🌍 โลกและสภาพอากาศ', data.world);
+        wrapper.querySelector('.d-body').onclick = () => showPop('🧸 ร่างกายและการแต่งกาย', data.body);
+        wrapper.querySelector('.d-plan').onclick = () => showPop('📅 ภารกิจและแผนการ', data.plan);
+    }
+
+    function showPop(title, items) {
+        const modal = document.getElementById('rp-modal');
+        const content = document.getElementById('rp-modal-content');
+        document.getElementById('rp-modal-title').innerText = title;
+        content.innerHTML = items.map(item => `<li>${item.trim()}</li>`).join('');
+        modal.style.display = 'flex';
+    }
+
+    // ติดตามข้อความที่เกิดขึ้นใหม่
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (mesId) => {
+        const mesElement = document.querySelector(`[mesid="${mesId}"]`);
+        if (mesElement) injectDots(mesElement);
+    });
+
+    // สร้าง Modal พื้นฐาน
+    function init() {
+        if (document.getElementById('rp-modal')) return;
+        const modalHtml = `
+            <div id="rp-modal" class="rp-overlay" onclick="this.style.display='none'">
+                <div class="rp-box" onclick="event.stopPropagation()">
+                    <div class="rp-header"><span id="rp-modal-title"></span></div>
+                    <ul id="rp-modal-content" class="rp-list"></ul>
+                </div>
+            </div>`;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    init();
 })();
+
