@@ -1,5 +1,5 @@
-// --- Sweet Heart HUD: Final Solid Fix ---
-const STORAGE_KEY = "sweet_hud_solid_v1";
+// --- Sweet Heart HUD: MP4 Video Edition ---
+const STORAGE_KEY = "sweet_hud_mp4_v1";
 
 const PAGES = [
     { id: 'lore', title: 'Diary', icon: 'fa-book' },
@@ -34,15 +34,21 @@ function saveSettings() {
 function injectUI() {
     $('#x_floating_btn, #x_main_modal').remove();
 
-    // สร้างลูกแก้ว (รูป GIF น้องแมงกะพรุนอย่างเดียว พื้นหลังมาจาก CSS)
-    $('body').append(`
+    // 1. สร้างลูกแก้ววิดีโอ
+    // ใช้ <video> แทน <img>
+    // attributes: autoplay (เล่นเอง), loop (วนซ้ำ), muted (ปิดเสียง - จำเป็นสำหรับเล่น auto บนมือถือ), playsinline (ไม่เด้งเต็มจอ)
+    const orbHtml = `
         <div id="x_floating_btn">
-            <img src="https://files.catbox.moe/n3eohs.gif" class="x-core-img" alt="core">
+            <video class="x-core-video" autoplay loop muted playsinline>
+                <source src="https://files.catbox.moe/89qxpt.mp4" type="video/mp4">
+            </video>
         </div>
-    `);
+    `;
+    
+    $('body').append(orbHtml);
     $('#x_floating_btn').css(state.btnPos);
 
-    // หน้าต่างหลัก
+    // 2. หน้าต่างหลัก
     const html = `
     <div id="x_main_modal">
         <div class="x-header" id="x_drag_zone">
@@ -89,6 +95,7 @@ function bindEvents() {
     const orb = $('#x_floating_btn');
     const modal = $('#x_main_modal');
 
+    // คลิกเปิด/ปิด
     orb.on('click', () => {
         if (!state.lockOrb) return;
         modal.fadeToggle(200).css('display', 'flex');
@@ -163,4 +170,3 @@ function makeDraggable(el, type, handle) {
     };
     trigger.onmousedown = start; trigger.ontouchstart = start;
 }
-
