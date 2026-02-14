@@ -34,21 +34,21 @@ function saveSettings() {
 function injectUI() {
     $('#x_floating_btn, #x_main_modal').remove();
 
-    // 1. สร้างลูกแก้ววิดีโอ
-    // ใช้ <video> แทน <img>
-    // attributes: autoplay (เล่นเอง), loop (วนซ้ำ), muted (ปิดเสียง - จำเป็นสำหรับเล่น auto บนมือถือ), playsinline (ไม่เด้งเต็มจอ)
-    const orbHtml = `
+    // สร้างลูกแก้วโดยใช้ VIDEO tag
+    // autoplay: เล่นอัตโนมัติ
+    // loop: เล่นวนซ้ำ
+    // muted: ปิดเสียง (จำเป็นสำหรับ auto play บนมือถือ)
+    // playsinline: เล่นในกรอบไม่เด้งเต็มจอ (จำเป็นสำหรับ iPhone/Android)
+    $('body').append(`
         <div id="x_floating_btn">
             <video class="x-core-video" autoplay loop muted playsinline>
                 <source src="https://files.catbox.moe/89qxpt.mp4" type="video/mp4">
             </video>
         </div>
-    `;
-    
-    $('body').append(orbHtml);
+    `);
     $('#x_floating_btn').css(state.btnPos);
 
-    // 2. หน้าต่างหลัก
+    // หน้าต่างหลัก
     const html = `
     <div id="x_main_modal">
         <div class="x-header" id="x_drag_zone">
@@ -95,7 +95,6 @@ function bindEvents() {
     const orb = $('#x_floating_btn');
     const modal = $('#x_main_modal');
 
-    // คลิกเปิด/ปิด
     orb.on('click', () => {
         if (!state.lockOrb) return;
         modal.fadeToggle(200).css('display', 'flex');
