@@ -1,74 +1,117 @@
-/* จัดวางจุดให้อยู่ตำแหน่งเดียวกับวันที่ */
-.sweet-dots-wrapper {
-    display: flex;
-    gap: 5px;
-    margin-left: auto; /* ดันไปทางขวา */
-    padding-right: 5px;
+/* --- Sweet Heart HUD: NO MORE TRANSPARENT --- */
+@import url('https://fonts.googleapis.com/css2?family=Mitr:wght@300;400;500&family=Comfortaa:wght@400;700&display=swap');
+
+:root {
+    --sweet-pink: #ffb7c5;      
+    --sweet-pink-dark: #ea93a2;
+    --sweet-bg-glass: rgba(220, 220, 220, 0.45);
+    --sweet-text: #5d5d5d;      
+    --sweet-border: rgba(255, 255, 255, 0.6);
+    --sweet-glow: rgba(255, 183, 197, 0.6);
 }
 
-.s-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
+/* --- 1. The Floating Button (ลูกแก้ว) --- */
+#x_floating_btn {
+    position: fixed !important;
+    width: 38px !important;
+    height: 38px !important;
+    
+    /* [จุดแก้ปัญหา] ใส่สีพื้นหลัง + ภาพพื้นหลัง แบบชัดเจนที่สุด */
+    background: #ffe5d9 url('https://files.catbox.moe/0fd3gy.jpg') no-repeat center center !important;
+    background-size: cover !important;
+    
+    border-radius: 50% !important;
     cursor: pointer;
-    border: 2px solid #ffffff;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-    transition: 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    z-index: 20000;
+    
+    /* เพิ่มเงาให้ดูทึบแสง ไม่ลอยๆ */
+    box-shadow: 
+        0 0 0 2px white,
+        0 4px 10px rgba(0,0,0,0.3), 
+        0 0 15px var(--sweet-glow);
+        
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: transform 0.2s;
+    overflow: visible !important;
 }
 
-.s-dot:hover { transform: translateY(-3px) scale(1.2); }
+/* น้องแมงกะพรุน GIF */
+.x-core-img {
+    width: 85% !important; 
+    height: 85% !important;
+    object-fit: contain !important;
+    z-index: 5 !important;
+    pointer-events: none;
+    filter: drop-shadow(0 0 2px rgba(255,255,255,0.5)); /* เพิ่มขอบให้น้องชัดขึ้น */
+}
 
-.d-world { background-color: #FFB7B2; } /* ชมพูพาสเทล */
-.d-body { background-color: #B2E2F2; }  /* ฟ้าพาสเทล */
-.d-plan { background-color: #E2F0CB; }  /* เขียวพาสเทล */
+/* เอฟเฟคดาววิบวับรอบนอก */
+#x_floating_btn::after {
+    content: '';
+    position: absolute;
+    width: 100%; height: 100%;
+    top: 0; left: 0;
+    background: transparent;
+    border-radius: 50%;
+    /* สร้างดาว */
+    box-shadow: 
+        -20px -15px 0 1px #fff,        
+         18px -18px 0 0px var(--sweet-pink), 
+        -18px  18px 0 0px var(--sweet-pink), 
+         20px  14px 0 1px #fff;
+    animation: sweet-twinkle 3s infinite ease-in-out;
+    pointer-events: none;
+    z-index: -1;
+}
 
-/* หน้าต่าง Modal */
-.rp-overlay {
+/* วงแหวนหมุนรอบ */
+#x_floating_btn::before {
+    content: ''; position: absolute;
+    width: 48px; height: 48px;
+    border: 1px dashed var(--sweet-pink);
+    border-radius: 50%;
+    opacity: 0.6; /* เพิ่มความชัด */
+    animation: sweet-spin 12s linear infinite;
+    pointer-events: none;
+    z-index: -2;
+}
+
+/* --- ส่วนหน้าต่างเมนู (คงเดิม) --- */
+#x_main_modal {
     display: none;
     position: fixed;
-    top:0; left:0; width:100%; height:100%;
-    background: rgba(255, 245, 247, 0.4);
-    backdrop-filter: blur(5px);
-    z-index: 10000;
-    justify-content: center; align-items: center;
+    top: 15vh; left: 5vw;
+    width: 90vw;
+    height: 55vh;
+    max-height: 480px;
+    background: var(--sweet-bg-glass);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--sweet-border);
+    border-radius: 16px;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+    z-index: 20001;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: 'Mitr', sans-serif;
+    animation: pop-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.x-header { height: 44px; background: rgba(255, 255, 255, 0.4); border-bottom: 1px solid var(--sweet-border); display: flex; align-items: center; justify-content: space-between; padding: 0 8px; }
+.x-nav-container { display: flex; align-items: center; justify-content: center; gap: 4px; flex: 1; padding: 0 5px; }
+.x-nav-icon { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; color: var(--sweet-text); border-radius: 6px; cursor: pointer; font-size: 11px; transition: 0.2s; background: rgba(255,255,255,0.3); border: 1px solid transparent; }
+.x-nav-icon.active { background: var(--sweet-pink); color: white; box-shadow: 0 0 5px var(--sweet-glow); transform: translateY(-1px); }
+.x-controls-group { display: flex; align-items: center; gap: 4px; }
+.x-mini-btn { height: 22px; padding: 0 6px; background: rgba(255,255,255,0.5); border: 1px solid white; border-radius: 10px; font-size: 9px; color: var(--sweet-text); display: flex; align-items: center; gap: 3px; cursor: pointer; }
+.x-mini-btn.active { background: var(--sweet-pink); color: white; border-color: var(--sweet-pink); }
+.x-close-icon { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: #ff8b94; cursor: pointer; font-size: 14px; margin-left: 2px; background: rgba(255,255,255,0.5); border-radius: 50%; }
+.x-content-box { flex: 1; overflow-y: auto; padding: 15px; position: relative; }
+.x-page { display: none; animation: fade-up 0.3s; }
+.x-page.active { display: block; }
+.x-page-header { font-size: 13px; color: var(--sweet-pink-dark); font-weight: bold; margin-bottom: 8px; border-bottom: 1px dashed var(--sweet-pink); padding-bottom: 4px; }
 
-.rp-box {
-    background: #ffffff;
-    border: 4px solid #FFD1DC;
-    border-radius: 25px;
-    padding: 25px;
-    width: 280px;
-    box-shadow: 0 15px 35px rgba(255, 182, 193, 0.3);
-}
-
-.rp-header {
-    font-size: 1.1em;
-    font-weight: bold;
-    color: #FF85A2;
-    border-bottom: 2px dashed #FFD1DC;
-    margin-bottom: 15px;
-    text-align: center;
-    padding-bottom: 5px;
-}
-
-.rp-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.rp-list li {
-    font-size: 0.95em;
-    color: #666;
-    margin-bottom: 8px;
-    padding-left: 15px;
-    position: relative;
-}
-
-.rp-list li::before {
-    content: '🌸';
-    position: absolute;
-    left: -5px;
-    font-size: 0.8em;
-}
+@keyframes sweet-spin { 100% {transform: rotate(360deg);} }
+@keyframes pop-in { from {transform: scale(0.95); opacity: 0;} to {transform: scale(1); opacity: 1;} }
+@keyframes fade-up { from {transform: translateY(5px); opacity: 0;} to {transform: translateY(0); opacity: 1;} }
+@keyframes sweet-twinkle { 0%, 100% { opacity: 0.5; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.1); } }
